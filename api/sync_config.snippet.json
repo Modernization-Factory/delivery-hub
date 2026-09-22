@@ -1,0 +1,58 @@
+{
+  "base_url": "http://localhost:8080",
+  "auth": { "type": "bearer", "token_file": "internal_app_token.txt" },
+  "endpoints": [
+    {
+      "name": "projects",
+      "path": "/api/integration/projects",
+      "items_path": "items",
+      "external_id": "external_id",
+      "collection": "projects",
+      "join_key": "project_name",
+      "field_map": {
+        "project_name": "name",
+        "pm": "pm",
+        "phase": "phase",
+        "start_date": "start",
+        "target_end_date": "end"
+      }
+    },
+    {
+      "name": "milestones",
+      "path": "/api/integration/milestones",
+      "items_path": "items",
+      "external_id": "external_id",
+      "collection": "milestones",
+      "field_map": {
+        "project_name": "project_name",
+        "milestone_name": "name",
+        "phase": "phase",
+        "planned_date": "planned",
+        "actual_date": "actual",
+        "status": "status",
+        "rag": "rag",
+        "comments": "comments"
+      }
+    },
+    {
+      "name": "raid",
+      "path": "/api/integration/raid",
+      "items_path": "items",
+      "external_id": "external_id",
+      "collection": "raid_log",
+      "field_map": {
+        "project_name": "project_name",
+        "type": "type",
+        "description": "description",
+        "impact": "impact",
+        "probability": "probability",
+        "owner": "owner",
+        "target_date": "target_date",
+        "status": "status",
+        "linked_item": "linked_item",
+        "comments": "comments"
+      }
+    }
+  ],
+  "enabled": true
+}
