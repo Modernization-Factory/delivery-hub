@@ -299,20 +299,24 @@ gated on the branch:
 ```yaml
 trigger:
   branch:
-    - delivery-hub
+    - main
 ```
 
-So a push or merge to **`delivery-hub`** builds the image and rolls the deployment —
-this project deploys from that branch, not from `main`.
+So a push or merge to **`main`** builds the image and rolls the deployment.
+
+> **Changed with the repo split.** In the `amp-pm-apac` monorepo the trigger branch was
+> `delivery-hub`. This is now a dedicated repository whose default branch is `main`, so
+> the Kanopy/Drone configuration must be re-pointed to `main` — otherwise the pipeline
+> waits on a branch that no longer exists here.
 
 > **`.drone.yml` does not exist in this repository yet.** Until it is added, pushing to
-> `delivery-hub` builds nothing and deploys nothing; the image has to be built and
-> pushed by hand (5.1). This is the last piece of the deployment path still missing.
+> `main` builds nothing and deploys nothing; the image has to be built and pushed by
+> hand (5.1). This is the last piece of the deployment path still missing.
 
 Two consequences worth holding onto:
 
-- **`delivery-hub` is a deploying branch, not a working branch.** Anything merged into it
-  goes out. Do feature work on a side branch and merge deliberately.
+- **`main` is a deploying branch, not a working branch.** Anything merged into it goes
+  out. Do feature work on a side branch and merge deliberately.
 - The seed and identity scripts are *not* part of the pipeline. They are run manually
   against the target database (5.4), and `import-seed.js` must never be re-run on an
   established one.
@@ -320,7 +324,7 @@ Two consequences worth holding onto:
 ### 5.6 Upgrades
 
 Push a new image tag and roll the deployment — or, once the pipeline exists, merge to
-`delivery-hub`. Application data lives entirely in MongoDB; no build step touches it, and
+`main`. Application data lives entirely in MongoDB; no build step touches it, and
 no seed script should be re-run on an established database.
 
 ---

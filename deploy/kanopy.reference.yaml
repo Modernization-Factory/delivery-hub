@@ -63,11 +63,12 @@ env:
 #
 #   trigger:
 #     branch:
-#       - delivery-hub
+#       - main
 #
-# This project deploys from delivery-hub, not main — so that branch is a deploying
-# branch and anything merged into it ships. NOTE: .drone.yml is not in the repo yet,
-# so nothing is triggered today and images must be built and pushed by hand.
+# main is a deploying branch: anything merged into it ships. The trigger was
+# delivery-hub while this lived in the amp-pm-apac monorepo; re-point the Kanopy/Drone
+# config to main now that it has its own repository. NOTE: .drone.yml is still not in
+# the repo, so nothing is triggered today and images must be built and pushed by hand.
 
 # ---------------------------------------------------------------------------
 # Probes
