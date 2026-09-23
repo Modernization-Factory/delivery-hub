@@ -1,0 +1,14 @@
+{
+  "name": "delivery-hub",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DeliveryHub — AMP APAC unified delivery tracker. Root scripts drive the api/ and web/ workspaces.",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "setup": "npm ci --prefix api && npm ci --prefix web",
+    "dev": "node scripts/dev.mjs",
+    "build": "npm run build --prefix web",
+    "test": "npm test --prefix api && npm test --prefix web",
+    "seed": "npm run seed --prefix api"
+  }
+}

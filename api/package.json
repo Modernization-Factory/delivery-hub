@@ -2,10 +2,13 @@
   "name": "delivery-hub-api",
   "version": "1.0.0",
   "private": true,
-  "description": "DeliveryHub backend — MongoDB + Okta (Kanopy) for the AMP APAC unified tracker",
-  "engines": { "node": ">=20" },
+  "description": "DeliveryHub backend \u2014 MongoDB + Okta (Kanopy) for the AMP APAC unified tracker",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node src/server.js",
+    "dev": "node --env-file=.env src/server.js",
     "seed": "node scripts/import-seed.js",
     "test": "node test/rules.test.js"
   },

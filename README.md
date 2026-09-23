@@ -17,7 +17,8 @@ replacing the spreadsheet trackers it was reconciled from.
 │   ├── src/ui/         shared atoms + hooks
 │   ├── src/views/      one module per screen
 │   └── test/           unit, render-smoke and structure tests
-├── deploy/             Kanopy ingress reference (Okta vs. token-auth path split)
+├── scripts/            dev.mjs — runs api + web together (npm run dev)
+├── deploy/             Kanopy reference: Okta, identity JWT, deploy trigger
 ├── raw-seed-files/     source .xlsx exports the seed is generated from
 └── delivery-hub.jsx    the original single-file prototype (historical reference only —
                         the live app is web/src, do not edit this)
@@ -37,15 +38,31 @@ replacing the spreadsheet trackers it was reconciled from.
 
 ## 2. Local setup
 
-### 2.1 API
+### 2.1 Quickstart
 
 ```bash
-cd api
-npm install
-cp .env.example .env           # then edit it
+npm run setup                  # npm ci in api/ and web/
+cp api/.env.example api/.env   # then set MONGODB_URI
 npm run seed                   # one-time: loads the reconciled tracker data
-npm start                      # http://localhost:8080
+npm run dev                    # starts BOTH, Ctrl-C stops both
 ```
+
+Then open **http://localhost:5173** — not `:8080`. Vite serves the UI and proxies
+`/api`, `/auth` and `/healthz` through to the API.
+
+Root scripts:
+
+| Command | Does |
+|---|---|
+| `npm run setup` | `npm ci` in both workspaces |
+| `npm run dev` | API + Vite together, output prefixed `api │` / `web │` |
+| `npm test` | both test suites |
+| `npm run build` | production frontend bundle |
+| `npm run seed` | the one-time data import (see 5.4 before using it) |
+
+`npm run dev` checks its preconditions first and fails with the command to fix them
+rather than a stack trace. If either process exits, the other is stopped too, so the
+stack is never left half-running with a port held.
 
 Minimum `.env` for local work:
 
@@ -53,9 +70,12 @@ Minimum `.env` for local work:
 MONGODB_URI=mongodb://localhost:27017      # or your Atlas SRV string
 DB_NAME=deliveryhub
 AUTH_MODE=proxy-headers                    # trust the identity header (local + Kanopy ingress)
-TRUSTED_EMAIL_HEADER=x-forwarded-email
 PORT=8080
 ```
+
+> `npm start` in `api/` does **not** read `.env` — that is deliberate, because the
+> container supplies its environment directly and `--env-file` fails on a missing file.
+> Use `npm run dev` (root, or inside `api/`) for local work.
 
 Full variable list:
 
@@ -112,15 +132,17 @@ MONGODB_URI="<atlas-uri>" node scripts/backfill-identities.js identities.prod.js
 The script only ever updates `email`, `isAdmin`, `streamLead` and `viewer` on existing
 employees — it never inserts, deletes or drops, and re-running it is a no-op.
 
-### 2.3 Web
+### 2.3 Running the halves separately
+
+`npm run dev` at the root covers normal work. To run just one — debugging the API
+against a paused frontend, say:
 
 ```bash
-cd web
-npm install
-npm run dev                    # http://localhost:5173 (proxies /api, /auth, /healthz -> :8080)
+npm run dev --prefix api    # :8080, reads api/.env
+npm run dev --prefix web    # :5173, proxies /api, /auth, /healthz -> :8080
 ```
 
-Sign in with one of the emails you just activated. To test another persona, activate a
+Sign in with one of the emails you activated above. To test another persona, activate a
 second email and open it in a private window.
 
 ### 2.4 Optional: Program Health history
