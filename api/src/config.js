@@ -12,7 +12,17 @@ module.exports = {
   DB_NAME: process.env.DB_NAME || "deliveryhub",
   AUTH_MODE,
   // Mode A: Kanopy ingress performs Okta OIDC and forwards a trusted identity header.
-  TRUSTED_EMAIL_HEADER: (process.env.TRUSTED_EMAIL_HEADER || "x-forwarded-email").toLowerCase(),
+  // On Kanopy that header is X-Kanopy-Internal-Authorization and carries an Okta-backed
+  // JWT, not a bare address; locally it is a plain email. auth.js accepts either.
+  // IDENTITY_HEADER is the current name; TRUSTED_EMAIL_HEADER is kept as a fallback.
+  IDENTITY_HEADER: (process.env.IDENTITY_HEADER || process.env.TRUSTED_EMAIL_HEADER || "x-forwarded-email").toLowerCase(),
+  // JWKS used to verify that JWT. Without it the token cannot be trusted, so an
+  // unverified token is refused unless TRUST_UNVERIFIED_IDENTITY_JWT is explicitly set.
+  IDENTITY_JWKS_URL: process.env.IDENTITY_JWKS_URL || null,
+  IDENTITY_ISSUER: process.env.IDENTITY_ISSUER || null,
+  IDENTITY_AUDIENCE: process.env.IDENTITY_AUDIENCE || null,
+  IDENTITY_CLAIM: process.env.IDENTITY_CLAIM || null, // default: first of email/preferred_username/sub
+  TRUST_UNVERIFIED_IDENTITY_JWT: process.env.TRUST_UNVERIFIED_IDENTITY_JWT === "true",
   // Mode B: app-managed OIDC against Okta.
   OKTA_ISSUER: AUTH_MODE === "oidc" ? req("OKTA_ISSUER") : process.env.OKTA_ISSUER,
   OKTA_CLIENT_ID: AUTH_MODE === "oidc" ? req("OKTA_CLIENT_ID") : process.env.OKTA_CLIENT_ID,

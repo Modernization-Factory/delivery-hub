@@ -65,7 +65,11 @@ Full variable list:
 | `DB_NAME` | no (`deliveryhub`) | Database name. |
 | `PORT` | no (`8080`) | HTTP port; Kanopy injects this. |
 | `AUTH_MODE` | no (`proxy-headers`) | `proxy-headers` or `oidc`. |
-| `TRUSTED_EMAIL_HEADER` | no (`x-forwarded-email`) | Header the ingress injects. Confirm the exact name in the Kanopy docs. |
+| `IDENTITY_HEADER` | no (`x-forwarded-email`) | Header the ingress injects. On Kanopy: `x-kanopy-internal-authorization`. `TRUSTED_EMAIL_HEADER` still works as a fallback name. |
+| `IDENTITY_JWKS_URL` | on Kanopy | JWKS used to verify the identity JWT. Required whenever that header carries a token. |
+| `IDENTITY_ISSUER`, `IDENTITY_AUDIENCE` | no | Extra JWT claim checks. Omit to skip. |
+| `IDENTITY_CLAIM` | no (`email`) | Claim holding the address; falls back to `preferred_username`, then `sub`. |
+| `TRUST_UNVERIFIED_IDENTITY_JWT` | no (`false`) | Accept the JWT without verifying it. Only defensible when nothing can bypass the ingress. |
 | `OKTA_ISSUER`, `OKTA_CLIENT_ID`, `OKTA_CLIENT_SECRET`, `SESSION_SECRET` | only in `oidc` mode | App-managed authorization-code flow. |
 | `APP_URL` | no | Public URL, used to build the OIDC redirect URI. |
 | `SESSION_TTL_HOURS` | no (`10`) | Session cookie lifetime in `oidc` mode. |
@@ -235,8 +239,12 @@ SPA fallback, so the app and `/api` share one origin: no CORS, and one ingress c
 - **Probes:** liveness `GET /healthz`, readiness `GET /readyz` (pings Mongo, 503 when down).
 - **Secrets:** `MONGODB_URI`, plus the Okta values in `oidc` mode and `INTEGRATION_TOKENS`
   if the integration API is enabled — all via the platform secret store, never committed.
-- **Ingress:** must enforce Okta and inject the identity header. Verify the header name
-  against the Kanopy docs and set `TRUSTED_EMAIL_HEADER` to match.
+- **Okta:** declared in the service catalog entry, not with ingress annotations:
+  `serviceCatalogEntry.authorization.clientPrincipals: [<okta_client_id>]`.
+- **Identity:** the ingress forwards `X-Kanopy-Internal-Authorization`, which carries a
+  Kanopy-issued, Okta-backed **JWT — not a bare email**. Set `IDENTITY_HEADER` to that
+  name and `IDENTITY_JWKS_URL` so the app can verify it and read the email claim. Without
+  the JWKS the app refuses the request rather than trusting an unverified token.
 - **Network:** no direct route to the container that bypasses the ingress.
 
 #### The integration path must bypass Okta
@@ -246,7 +254,7 @@ not by people holding an Okta session. An Okta-gated ingress across the whole ho
 answer those calls with a login redirect. Split it into two ingress objects over the same
 service — `/` Okta-gated, `/api/integration` not (still token-gated by the app, and with
 the identity header stripped on that path). Reference shape, with the Kanopy-specific keys
-called out as TODOs: `deploy/ingress.reference.yaml`.
+called out as TODOs: `deploy/kanopy.reference.yaml`.
 
 ### 5.4 First deploy — data setup
 
@@ -312,5 +320,5 @@ keyed for upserts on the stable `external_id`. Requests without a valid bearer t
 | Frontend structure, module rules, test layout | `web/README.md` |
 | Endpoint list, auth modes, post-seed checklist | `api/README.md` |
 | Program Health data feed | `api/INTEGRATION.md` |
-| Ingress split (Okta vs. token path) | `deploy/ingress.reference.yaml` |
+| Kanopy config, Okta and the integration carve-out | `deploy/kanopy.reference.yaml` |
 | Shared business rules (the authoritative maths) | `api/src/rules.js`, `web/src/lib/` |

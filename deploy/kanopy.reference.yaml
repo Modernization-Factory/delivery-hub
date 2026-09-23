@@ -1,0 +1,73 @@
+# DeliveryHub on Kanopy — REFERENCE, not applied as-is.
+#
+# CONFIRMED
+#   Okta enforcement is declared in the service catalog entry, not with nginx
+#   external-auth annotations:
+#
+#     serviceCatalogEntry:
+#       authorization:
+#         clientPrincipals:
+#           - <okta_client_id>
+#
+#   The ingress then forwards identity in X-Kanopy-Internal-Authorization, which
+#   carries a Kanopy-issued, Okta-backed JWT — NOT a bare email address.
+#
+# STILL UNRESOLVED
+#   How to exempt /api/integration from that authorization. clientPrincipals is
+#   declared per service catalog entry, so it most likely cannot be scoped to a
+#   path; see the note at the bottom for the two viable shapes. Do not guess.
+
+serviceCatalogEntry:
+  authorization:
+    clientPrincipals:
+      - <okta_client_id>        # the Okta app registration Kanopy authenticates against
+
+# ---------------------------------------------------------------------------
+# Application configuration
+# ---------------------------------------------------------------------------
+# The identity header holds a JWT, so the app must verify it and read the email
+# claim. IDENTITY_JWKS_URL is required: without it the app refuses the request
+# rather than trusting an unverified token (see api/src/auth.js).
+env:
+  AUTH_MODE: proxy-headers
+  DB_NAME: deliveryhub
+  IDENTITY_HEADER: x-kanopy-internal-authorization
+  IDENTITY_JWKS_URL: <kanopy-jwks-endpoint>     # TODO: confirm with Kanopy
+  IDENTITY_ISSUER: <kanopy-jwt-issuer>          # TODO: confirm; omit to skip the check
+  IDENTITY_AUDIENCE: <okta_client_id>           # TODO: confirm the aud claim
+  IDENTITY_CLAIM: email                         # falls back to preferred_username, then sub
+
+# Secrets (platform secret store, never committed): MONGODB_URI, and
+# INTEGRATION_TOKENS if the Program Health feed is enabled.
+
+# ---------------------------------------------------------------------------
+# Probes
+# ---------------------------------------------------------------------------
+livenessProbe:
+  httpGet: { path: /healthz, port: 8080 }
+readinessProbe:
+  httpGet: { path: /readyz, port: 8080 }        # pings Mongo; 503 when it is unreachable
+
+# ---------------------------------------------------------------------------
+# The /api/integration carve-out — UNRESOLVED
+# ---------------------------------------------------------------------------
+# /api/integration is called by machines (the Program Health app) holding a bearer
+# token from INTEGRATION_TOKENS, not by people holding an Okta session. Under a
+# service-wide clientPrincipals policy those calls get an auth challenge instead of
+# JSON, and the feed breaks.
+#
+# Two shapes that would work, in preference order — confirm which Kanopy supports
+# before building either:
+#
+#   1. Path-scoped exemption, if the catalog entry or ingress supports excluding a
+#      prefix from clientPrincipals. Simplest: one deployment, one host.
+#
+#   2. A second Deployment + Service from the SAME image, with no clientPrincipals,
+#      exposed on its own host and routed only to /api/integration. The app already
+#      gates that router on bearer tokens independently of user auth
+#      (api/src/integration.js), so this is safe provided the second host cannot
+#      reach the user-facing routes — enforce with a path-restricted ingress.
+#
+# Until this is resolved, deploying with a service-wide policy means the Program
+# Health sync will not work. That is a launch blocker only if the feed is in scope
+# for day one.

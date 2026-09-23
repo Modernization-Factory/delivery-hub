@@ -39,7 +39,10 @@ after each run:
 - `/api/integration` must be carved out of the ingress's Okta enforcement — it is
   bearer-token auth for machines. See `deploy/ingress.reference.yaml`.
 - `PORT` env respected; container runs as non-root; secrets via platform secret store.
-- Confirm the exact identity header name with the Kanopy docs → `TRUSTED_EMAIL_HEADER`.
+- Kanopy forwards `X-Kanopy-Internal-Authorization`, holding an Okta-backed JWT rather
+  than an email. Set `IDENTITY_HEADER` to it and `IDENTITY_JWKS_URL` to the JWKS;
+  `auth.js` verifies the token and reads the email claim. A plain address in the same
+  header still works, which is what local development uses.
 
 ## Endpoints (all under /api, capability-gated)
 me · employees (CRUD) · leaves (list/create/delete with duplicate-block + overlap-warn +

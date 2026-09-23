@@ -97,12 +97,61 @@ function logout(res) {
   res.setHeader("Set-Cookie", `${COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`);
 }
 
+/**
+ * Identity from the ingress header. Kanopy's X-Kanopy-Internal-Authorization carries an
+ * Okta-backed JWT, while local development sends a bare email through the same header,
+ * so both shapes are accepted: anything containing "@" is treated as an address, a
+ * three-segment token as a JWT.
+ *
+ * A JWT is only meaningful once verified — an unverified one is just a string the caller
+ * chose, so anything able to reach the pod could mint an identity. Verification therefore
+ * requires IDENTITY_JWKS_URL, and skipping it has to be opted into deliberately via
+ * TRUST_UNVERIFIED_IDENTITY_JWT (defensible only when nothing can bypass the ingress).
+ */
+let jwks = null;
+async function identityFromHeader(raw) {
+  if (!raw) return null;
+  let v = String(Array.isArray(raw) ? raw[0] : raw).trim();
+  v = v.replace(/^Bearer\s+/i, "");
+  if (!v) return null;
+  if (v.includes("@") || v.split(".").length !== 3) return v.toLowerCase(); // plain address
+
+  const { createRemoteJWKSet, jwtVerify, decodeJwt } = getJose();
+  let claims;
+  if (cfg.IDENTITY_JWKS_URL) {
+    if (!jwks) jwks = createRemoteJWKSet(new URL(cfg.IDENTITY_JWKS_URL));
+    const opts = {};
+    if (cfg.IDENTITY_ISSUER) opts.issuer = cfg.IDENTITY_ISSUER;
+    if (cfg.IDENTITY_AUDIENCE) opts.audience = cfg.IDENTITY_AUDIENCE;
+    try {
+      ({ payload: claims } = await jwtVerify(v, jwks, opts));
+    } catch (err) {
+      // A bad signature, wrong issuer or expired token is a failed authentication,
+      // not a server fault.
+      const e = new Error("invalid_identity_token");
+      e.status = 401;
+      e.detail = err.message;
+      throw e;
+    }
+  } else if (cfg.TRUST_UNVERIFIED_IDENTITY_JWT) {
+    claims = decodeJwt(v); // signature NOT checked — see the comment above
+  } else {
+    const e = new Error("identity_jwt_unverifiable");
+    e.status = 500;
+    e.detail = "The identity header holds a JWT but IDENTITY_JWKS_URL is not configured.";
+    throw e;
+  }
+  const names = cfg.IDENTITY_CLAIM ? [cfg.IDENTITY_CLAIM] : ["email", "preferred_username", "sub"];
+  for (const n of names) if (claims[n]) return String(claims[n]).toLowerCase();
+  return null;
+}
+
 // ---- Identity resolution middleware (both modes) ----
 async function resolveUser(req, res, next) {
   try {
     let email = null;
     if (cfg.AUTH_MODE === "proxy-headers") {
-      email = req.headers[cfg.TRUSTED_EMAIL_HEADER];
+      email = await identityFromHeader(req.headers[cfg.IDENTITY_HEADER]);
     } else {
       const session = verify(parseCookies(req)[COOKIE]);
       email = session && session.email;
