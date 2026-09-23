@@ -1,0 +1,10 @@
+# Real sign-in mappings must never be committed. Negations come last: in .gitignore the
+# last matching rule wins, so an un-anchored pattern below a negation would re-ignore it.
+identities.*.json
+!api/scripts/identities.local.json
+!api/scripts/identities.example.json
+
+.env
+.env.*
+!.env.example
+.DS_Store
