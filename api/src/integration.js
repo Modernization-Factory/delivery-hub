@@ -10,6 +10,7 @@
  * consumer's sync engine can use items_path = "items".
  */
 const express = require("express");
+const crypto = require("crypto");
 const { col } = require("./db");
 
 const integrationRouter = express.Router();
@@ -18,12 +19,29 @@ function tokens() {
   return (process.env.INTEGRATION_TOKENS || "").split(",").map((s) => s.trim()).filter(Boolean);
 }
 
+/**
+ * Constant-time token check. Comparing the raw strings (=== or Array.includes)
+ * short-circuits on the first differing byte, which leaks the shared prefix and
+ * lets a token be recovered a byte at a time. Hashing first gives both sides a
+ * fixed 32-byte length — timingSafeEqual throws on a length mismatch, so it must
+ * never be handed the attacker-controlled length directly — and the loop
+ * accumulates rather than returning early, so the runtime doesn't reveal which
+ * entry matched or how far down the list it sat.
+ */
+const sha256 = (s) => crypto.createHash("sha256").update(String(s), "utf8").digest();
+function tokenMatches(presented, list) {
+  const a = sha256(presented);
+  let ok = false;
+  for (const candidate of list) if (crypto.timingSafeEqual(a, sha256(candidate))) ok = true;
+  return ok;
+}
+
 integrationRouter.use((req, res, next) => {
   const list = tokens();
   if (!list.length) return res.status(503).json({ error: "integration_disabled", hint: "set INTEGRATION_TOKENS env var" });
   const h = req.headers.authorization || "";
   const tok = h.startsWith("Bearer ") ? h.slice(7).trim() : null;
-  if (!tok || !list.includes(tok)) return res.status(401).json({ error: "invalid_token" });
+  if (!tok || !tokenMatches(tok, list)) return res.status(401).json({ error: "invalid_token" });
   next();
 });
 

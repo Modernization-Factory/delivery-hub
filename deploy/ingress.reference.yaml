@@ -1,0 +1,64 @@
+# DeliveryHub ingress — REFERENCE SHAPE, not applied as-is.
+#
+# Two Ingress objects over the SAME Service, because the app has two callers with
+# two different identities:
+#
+#   1. people      -> everything except /api/integration -> Okta-gated at the ingress,
+#                     which injects the verified email header the app trusts.
+#   2. machines    -> /api/integration only -> NOT Okta-gated; authenticated by the
+#                     bearer tokens in INTEGRATION_TOKENS (see api/src/integration.js).
+#
+# An Okta-gated ingress over the whole host would bounce the Program Health app's
+# token requests into an Okta redirect, which is why the second object exists.
+#
+# !! BEFORE APPLYING !!
+# Kanopy's helm chart expresses ingress auth with its own values keys, and owns the
+# Okta app registration. Confirm against the Kanopy docs:
+#   a) the key that enables ingress OIDC/Okta auth,
+#   b) the exact identity header it injects  -> set TRUSTED_EMAIL_HEADER to match,
+#   c) that it OVERWRITES that header rather than passing a client-supplied one through.
+# The auth-url/auth-signin annotations below are the generic ingress-nginx external-auth
+# form and are almost certainly replaced by Kanopy's own values.
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: deliveryhub
+  annotations:
+    # --- Okta enforcement (REPLACE with Kanopy's equivalent) ---
+    nginx.ingress.kubernetes.io/auth-url: "https://<kanopy-auth-service>/oauth2/auth"
+    nginx.ingress.kubernetes.io/auth-signin: "https://<kanopy-auth-service>/oauth2/start?rd=$escaped_request_uri"
+    # The verified identity passed to the pod. Must match TRUSTED_EMAIL_HEADER.
+    nginx.ingress.kubernetes.io/auth-response-headers: "x-forwarded-email"
+spec:
+  rules:
+    - host: &host deliveryhub.<env>.corp.mongodb.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: &svc
+              service:
+                name: deliveryhub
+                port:
+                  number: 8080
+---
+# Machine path: more specific, so ingress-nginx matches it ahead of "/" above.
+# No auth annotations -> no Okta redirect. The app still requires a bearer token.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: deliveryhub-integration
+  annotations:
+    # Defence in depth: strip any inbound identity header on this un-gated path so a
+    # caller here can never reach the user-auth code paths with a forged email.
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_set_header x-forwarded-email "";
+spec:
+  rules:
+    - host: *host
+      http:
+        paths:
+          - path: /api/integration
+            pathType: Prefix
+            backend: *svc

@@ -31,9 +31,18 @@ function verify(token) {
   const [body, sig] = token.split(".");
   if (!body || !sig) return null;
   const expect = crypto.createHmac("sha256", cfg.SESSION_SECRET).update(body).digest("base64url");
-  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expect))) return null;
-  const payload = JSON.parse(Buffer.from(body, "base64url").toString());
-  if (payload.exp < Date.now()) return null;
+  // timingSafeEqual throws when the buffers differ in length, and `sig` is whatever
+  // the client sent — so hash both sides to a fixed 32 bytes before comparing. A
+  // malformed cookie must be an unauthenticated 401, never a 500.
+  const h = (s) => crypto.createHash("sha256").update(s, "utf8").digest();
+  if (!crypto.timingSafeEqual(h(sig), h(expect))) return null;
+  let payload;
+  try {
+    payload = JSON.parse(Buffer.from(body, "base64url").toString());
+  } catch {
+    return null;
+  }
+  if (!payload || typeof payload.exp !== "number" || payload.exp < Date.now()) return null;
   return payload;
 }
 function parseCookies(req) {

@@ -68,6 +68,7 @@ Full variable list:
 | `APP_URL` | no | Public URL, used to build the OIDC redirect URI. |
 | `SESSION_TTL_HOURS` | no (`10`) | Session cookie lifetime in `oidc` mode. |
 | `INTEGRATION_TOKENS` | no | Comma-separated bearer tokens for the read-only integration API. Unset = that surface returns 503. |
+| `STATIC_DIR` | no (`../public`) | Built frontend to serve same-origin. Absent = API-only mode. |
 
 ### 2.2 Activate a sign-in identity
 
@@ -139,28 +140,31 @@ collection — the same registry the frontend Admin panel edits.
 
 ## 5. Deployment (Kanopy)
 
-### 5.1 Build the API image
+### 5.1 Build the image
+
+One image holds both halves: the root `Dockerfile` builds `web/` in a first stage and
+copies the bundle into the API image at `/app/public`. Build from the **repo root**, not
+from `api/` — the web build stage needs it in context.
 
 ```bash
-cd api
-docker build -t <registry>/deliveryhub-api:<tag> .
-docker push  <registry>/deliveryhub-api:<tag>
+docker build -t <registry>/deliveryhub:<tag> .
+docker push  <registry>/deliveryhub:<tag>
 ```
 
 The image runs as the non-root `node` user, listens on `$PORT` (default 8080) and starts
 `src/server.js`.
 
-### 5.2 Build and ship the frontend
+### 5.2 How the frontend is served
 
-```bash
-cd web
-npm ci
-npm run build          # -> web/dist/
-```
+`src/server.js` mounts `/app/public` (override with `STATIC_DIR`) as static files with an
+SPA fallback, so the app and `/api` share one origin: no CORS, and one ingress covers both.
 
-Serve `web/dist/` from the **same origin** as the API so `/api` needs no CORS and the
-ingress covers both: either copy it into the API container/volume and serve it statically,
-or host it behind the same Kanopy ingress path.
+- Hashed assets under `/assets` are served `max-age=31536000`; `index.html` is `no-store`,
+  so a deploy can't leave clients pinned to a stale bundle.
+- The fallback deliberately excludes `/api`, `/auth`, `/healthz` and `/readyz`, so a bad
+  API path returns a 404 rather than a page of HTML.
+- If the directory is absent the handlers aren't mounted and the process runs API-only —
+  which is what local `npm start` does, with Vite serving the app on :5173.
 
 ### 5.3 Platform configuration
 
@@ -170,6 +174,15 @@ or host it behind the same Kanopy ingress path.
 - **Ingress:** must enforce Okta and inject the identity header. Verify the header name
   against the Kanopy docs and set `TRUSTED_EMAIL_HEADER` to match.
 - **Network:** no direct route to the container that bypasses the ingress.
+
+#### The integration path must bypass Okta
+
+`/api/integration` is called by machines (the Program Health app) holding a bearer token,
+not by people holding an Okta session. An Okta-gated ingress across the whole host would
+answer those calls with a login redirect. Split it into two ingress objects over the same
+service — `/` Okta-gated, `/api/integration` not (still token-gated by the app, and with
+the identity header stripped on that path). Reference shape, with the Kanopy-specific keys
+called out as TODOs: `deploy/ingress.reference.yaml`.
 
 ### 5.4 First deploy — data setup
 
@@ -227,4 +240,5 @@ keyed for upserts on the stable `external_id`. Requests without a valid bearer t
 | Frontend structure, module rules, test layout | `web/README.md` |
 | Endpoint list, auth modes, post-seed checklist | `api/README.md` |
 | Program Health data feed | `api/INTEGRATION.md` |
+| Ingress split (Okta vs. token path) | `deploy/ingress.reference.yaml` |
 | Shared business rules (the authoritative maths) | `api/src/rules.js`, `web/src/lib/` |

@@ -6,6 +6,8 @@ const { resolveUser, authorizeUrl, handleCallback, logout } = require("./auth");
 const routes = require("./routes");
 const { integrationRouter } = require("./integration");
 const crypto = require("crypto");
+const path = require("path");
+const fs = require("fs");
 
 const app = express();
 app.set("trust proxy", true);
@@ -27,6 +29,27 @@ app.use("/api/integration", integrationRouter);
 
 // authenticated API
 app.use("/api", resolveUser, routes);
+
+/**
+ * Static frontend (same origin as the API, so /api needs no CORS and one Kanopy
+ * ingress covers both). STATIC_DIR is the built web/dist; the Dockerfile copies it
+ * to /app/public. When the directory is absent (local API-only dev, where Vite
+ * serves the app on :5173 and proxies here) these handlers are simply not mounted.
+ */
+const STATIC_DIR = path.resolve(process.env.STATIC_DIR || path.join(__dirname, "..", "public"));
+if (fs.existsSync(path.join(STATIC_DIR, "index.html"))) {
+  // Hashed build assets are immutable; index.html must never be cached or clients
+  // pin themselves to a stale bundle across a deploy.
+  app.use(express.static(STATIC_DIR, { index: false, maxAge: "1y", etag: true }));
+  app.get(/^(?!\/(api|auth|healthz|readyz)\b).*/, (req, res, next) => {
+    if (req.method !== "GET" && req.method !== "HEAD") return next();
+    res.setHeader("Cache-Control", "no-store");
+    res.sendFile(path.join(STATIC_DIR, "index.html"));
+  });
+  console.log("Serving frontend from " + STATIC_DIR);
+} else {
+  console.log("No frontend bundle at " + STATIC_DIR + " — API-only mode");
+}
 
 // central error handler
 app.use((err, _req, res, _next) => {

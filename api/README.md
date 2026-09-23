@@ -29,6 +29,12 @@ matrix stored in the `permissions` collection — same registry the frontend Adm
 
 ## Kanopy notes
 - Probes: `GET /healthz` (liveness), `GET /readyz` (readiness — pings Mongo).
+- The image is built from the **repo root** `Dockerfile` (multi-stage: builds `web/`, copies
+  the bundle to `/app/public`). `server.js` serves it with an SPA fallback that excludes
+  `/api`, `/auth`, `/healthz`, `/readyz`. Override the location with `STATIC_DIR`; when the
+  directory is missing the app runs API-only.
+- `/api/integration` must be carved out of the ingress's Okta enforcement — it is
+  bearer-token auth for machines. See `deploy/ingress.reference.yaml`.
 - `PORT` env respected; container runs as non-root; secrets via platform secret store.
 - Confirm the exact identity header name with the Kanopy docs → `TRUSTED_EMAIL_HEADER`.
 
