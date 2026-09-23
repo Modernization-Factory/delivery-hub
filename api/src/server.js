@@ -38,9 +38,18 @@ app.use("/api", resolveUser, routes);
  */
 const STATIC_DIR = path.resolve(process.env.STATIC_DIR || path.join(__dirname, "..", "public"));
 if (fs.existsSync(path.join(STATIC_DIR, "index.html"))) {
-  // Hashed build assets are immutable; index.html must never be cached or clients
-  // pin themselves to a stale bundle across a deploy.
-  app.use(express.static(STATIC_DIR, { index: false, maxAge: "1y", etag: true }));
+  // Only /assets carries a content hash in the filename, so only it can be cached
+  // immutably. Everything else served from here (favicon.svg and friends) keeps a
+  // stable name, and a year-long cache would strand clients on the old file after a
+  // replacement. index.html is handled separately below and is never cached.
+  app.use(express.static(STATIC_DIR, {
+    index: false,
+    etag: true,
+    setHeaders: (res, filePath) => {
+      const hashed = path.relative(STATIC_DIR, filePath).split(path.sep)[0] === "assets";
+      res.setHeader("Cache-Control", hashed ? "public, max-age=31536000, immutable" : "public, max-age=3600");
+    },
+  }));
   app.get(/^(?!\/(api|auth|healthz|readyz)\b).*/, (req, res, next) => {
     if (req.method !== "GET" && req.method !== "HEAD") return next();
     res.setHeader("Cache-Control", "no-store");
