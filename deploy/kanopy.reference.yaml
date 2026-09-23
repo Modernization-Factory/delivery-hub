@@ -10,7 +10,18 @@
 #           - <okta_client_id>
 #
 #   The ingress then forwards identity in X-Kanopy-Internal-Authorization, which
-#   carries a Kanopy-issued, Okta-backed JWT — NOT a bare email address.
+#   carries a Kanopy-issued, Okta-backed JWT — NOT a bare email address. JWKS, issuer
+#   and the absence of an aud claim are confirmed; see env: below.
+#
+#   NOTE ON SCOPE: issuer is login.corp.mongodb.com in both environments and there is
+#   no aud claim, so the token proves "a MongoDB identity via Kanopy" — not "a user of
+#   THIS service". Two consequences:
+#     - Environments are separated by signing key, not by issuer: a staging token fails
+#       in production only because production JWKS lacks that key. Point each
+#       environment at its own JWKS and do not share the value.
+#     - The per-service restriction comes from clientPrincipals at the ingress, so the
+#       existing rule stands and matters more here: nothing may reach the pod without
+#       passing through that ingress.
 #
 # STILL UNRESOLVED
 #   How to exempt /api/integration from that authorization. clientPrincipals is
@@ -32,10 +43,15 @@ env:
   AUTH_MODE: proxy-headers
   DB_NAME: deliveryhub
   IDENTITY_HEADER: x-kanopy-internal-authorization
-  IDENTITY_JWKS_URL: <kanopy-jwks-endpoint>     # TODO: confirm with Kanopy
-  IDENTITY_ISSUER: <kanopy-jwt-issuer>          # TODO: confirm; omit to skip the check
-  IDENTITY_AUDIENCE: <okta_client_id>           # TODO: confirm the aud claim
-  IDENTITY_CLAIM: email                         # falls back to preferred_username, then sub
+  IDENTITY_CLAIM: email
+  # Per environment (CONFIRMED with Kanopy):
+  #   staging     IDENTITY_JWKS_URL: https://login.staging.corp.mongodb.com/.well-known/jwks.json
+  #   production  IDENTITY_JWKS_URL: https://login.corp.mongodb.com/.well-known/jwks.json
+  IDENTITY_JWKS_URL: https://login.corp.mongodb.com/.well-known/jwks.json
+  IDENTITY_ISSUER: login.corp.mongodb.com     # same string in BOTH environments
+  # IDENTITY_AUDIENCE is deliberately UNSET. These internal tokens carry no standard
+  # aud claim, so setting it would reject every request. Leaving it unset disables the
+  # check (api/src/auth.js only passes `audience` to jose when the variable is present).
 
 # Secrets (platform secret store, never committed): MONGODB_URI, and
 # INTEGRATION_TOKENS if the Program Health feed is enabled.

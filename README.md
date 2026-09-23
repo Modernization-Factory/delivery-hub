@@ -67,7 +67,8 @@ Full variable list:
 | `AUTH_MODE` | no (`proxy-headers`) | `proxy-headers` or `oidc`. |
 | `IDENTITY_HEADER` | no (`x-forwarded-email`) | Header the ingress injects. On Kanopy: `x-kanopy-internal-authorization`. `TRUSTED_EMAIL_HEADER` still works as a fallback name. |
 | `IDENTITY_JWKS_URL` | on Kanopy | JWKS used to verify the identity JWT. Required whenever that header carries a token. |
-| `IDENTITY_ISSUER`, `IDENTITY_AUDIENCE` | no | Extra JWT claim checks. Omit to skip. |
+| `IDENTITY_ISSUER` | no | Expected `iss`. On Kanopy: `login.corp.mongodb.com` (both environments). |
+| `IDENTITY_AUDIENCE` | no | Expected `aud`. **Leave unset on Kanopy** — those tokens carry no `aud` claim, so setting it rejects everything. |
 | `IDENTITY_CLAIM` | no (`email`) | Claim holding the address; falls back to `preferred_username`, then `sub`. |
 | `TRUST_UNVERIFIED_IDENTITY_JWT` | no (`false`) | Accept the JWT without verifying it. Only defensible when nothing can bypass the ingress. |
 | `OKTA_ISSUER`, `OKTA_CLIENT_ID`, `OKTA_CLIENT_SECRET`, `SESSION_SECRET` | only in `oidc` mode | App-managed authorization-code flow. |
