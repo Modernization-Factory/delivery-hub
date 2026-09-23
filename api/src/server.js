@@ -62,8 +62,11 @@ if (fs.existsSync(path.join(STATIC_DIR, "index.html"))) {
 
 // central error handler
 app.use((err, _req, res, _next) => {
-  console.error(err);
-  res.status(500).json({ error: "internal", detail: err.message });
+  // Client errors (a malformed id, say) carry their own status and are expected, so they
+  // are answered as such and not logged as server faults.
+  const status = Number(err.status) || 500;
+  if (status >= 500) console.error(err);
+  res.status(status).json({ error: status >= 500 ? "internal" : err.message, detail: err.detail || err.message });
 });
 
 db.connect().then(() => {

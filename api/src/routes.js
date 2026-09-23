@@ -12,9 +12,37 @@ const { requireCap, requireAdmin } = require("./auth");
 const { audit } = require("./audit");
 
 const router = express.Router();
+
+/**
+ * Express 4 does not catch rejections from async handlers: one throw inside any of the
+ * routes below becomes an unhandled rejection, which Node exits on — so a single bad
+ * request takes the whole API down (and would crashloop the pod on Kanopy). Wrapping
+ * every handler routes those failures to the central error handler instead.
+ * Error-handling middleware (arity 4) is passed through untouched.
+ */
+for (const method of ["get", "post", "put", "patch", "delete", "use"]) {
+  const original = router[method].bind(router);
+  router[method] = (...args) =>
+    original(...args.map((a) =>
+      typeof a === "function" && a.length < 4
+        ? function wrapped(req, res, next) { return Promise.resolve(a(req, res, next)).catch(next); }
+        : a));
+}
+
 const upload = multer({ limits: { fileSize: 5 * 1024 * 1024 } });
 const iso = (d) => (d ? R.toISO(d) : null);
 const day = (s) => (s ? new Date(s + "T00:00:00Z") : null);
+// Request value -> ObjectId. Validates first so a malformed id is a 400 rather than a
+// raw BSONError surfacing as a 500.
+const oid = (v) => {
+  if (!ObjectId.isValid(String(v))) {
+    const e = new Error("invalid_id");
+    e.status = 400;
+    e.detail = `"${v}" is not a valid id`;
+    throw e;
+  }
+  return new ObjectId(String(v));
+};
 
 async function settings() {
   return (await col("settings").findOne({ _id: "global" })) || {};
