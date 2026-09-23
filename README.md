@@ -251,11 +251,16 @@ SPA fallback, so the app and `/api` share one origin: no CORS, and one ingress c
 #### The integration path must bypass Okta
 
 `/api/integration` is called by machines (the Program Health app) holding a bearer token,
-not by people holding an Okta session. An Okta-gated ingress across the whole host would
-answer those calls with a login redirect. Split it into two ingress objects over the same
-service — `/` Okta-gated, `/api/integration` not (still token-gated by the app, and with
-the identity header stripped on that path). Reference shape, with the Kanopy-specific keys
-called out as TODOs: `deploy/kanopy.reference.yaml`.
+not by people holding an Okta session. `clientPrincipals` applies to the whole service
+catalog entry, so those calls get an auth challenge instead of JSON and the feed breaks.
+
+**This is the one deployment question still unanswered.** `clientPrincipals` is declared
+per service, so it may not be scopeable to a path — the question to put to Kanopy is
+whether a path prefix can be excluded, or whether a second Service is required. Both
+shapes are written up in `deploy/kanopy.reference.yaml`; neither has been guessed at.
+
+It blocks launch only if the Program Health feed is in scope on day one. Everything else
+can deploy without it.
 
 ### 5.4 First deploy — data setup
 
@@ -286,10 +291,37 @@ Then:
 4. Smoke-test: `GET /healthz`, `GET /readyz`, then sign in and load Dashboard, Timecard and
    Program Health.
 
-### 5.5 Upgrades
+### 5.5 How a deploy is triggered
 
-Push a new image tag and roll the deployment. Application data lives entirely in MongoDB;
-no build step touches it, and no seed script should be re-run on an established database.
+Kanopy deploys through Drone, driven by `.drone.yml` at the repo root. The pipeline is
+gated on the branch:
+
+```yaml
+trigger:
+  branch:
+    - delivery-hub
+```
+
+So a push or merge to **`delivery-hub`** builds the image and rolls the deployment —
+this project deploys from that branch, not from `main`.
+
+> **`.drone.yml` does not exist in this repository yet.** Until it is added, pushing to
+> `delivery-hub` builds nothing and deploys nothing; the image has to be built and
+> pushed by hand (5.1). This is the last piece of the deployment path still missing.
+
+Two consequences worth holding onto:
+
+- **`delivery-hub` is a deploying branch, not a working branch.** Anything merged into it
+  goes out. Do feature work on a side branch and merge deliberately.
+- The seed and identity scripts are *not* part of the pipeline. They are run manually
+  against the target database (5.4), and `import-seed.js` must never be re-run on an
+  established one.
+
+### 5.6 Upgrades
+
+Push a new image tag and roll the deployment — or, once the pipeline exists, merge to
+`delivery-hub`. Application data lives entirely in MongoDB; no build step touches it, and
+no seed script should be re-run on an established database.
 
 ---
 

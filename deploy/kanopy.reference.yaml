@@ -57,6 +57,19 @@ env:
 # INTEGRATION_TOKENS if the Program Health feed is enabled.
 
 # ---------------------------------------------------------------------------
+# Deploy trigger (CONFIRMED)
+# ---------------------------------------------------------------------------
+# Drone, gated on the branch, in .drone.yml at the repo root:
+#
+#   trigger:
+#     branch:
+#       - delivery-hub
+#
+# This project deploys from delivery-hub, not main — so that branch is a deploying
+# branch and anything merged into it ships. NOTE: .drone.yml is not in the repo yet,
+# so nothing is triggered today and images must be built and pushed by hand.
+
+# ---------------------------------------------------------------------------
 # Probes
 # ---------------------------------------------------------------------------
 livenessProbe:
