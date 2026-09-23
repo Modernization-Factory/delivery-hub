@@ -72,3 +72,29 @@ test("every view module exports exactly the screens it owns", () => {
     assert.ok(!/export default/.test(src), relOf(f) + " should use named exports");
   }
 });
+
+// React requires the same hooks, in the same order, on every render of a component.
+// A view that returns early for one mode (TeamPlans renders an editor branch before
+// its list branch) and then calls a hook further down renders fewer hooks the moment
+// that branch is taken, and React throws "Rendered fewer hooks than expected" — a
+// crash the single-pass render smoke tests cannot see, because they never re-render
+// into the other branch.
+test("views call no hook after a conditional early return", () => {
+  for (const f of files.filter((f) => relOf(f).startsWith("views/"))) {
+    const lines = fs.readFileSync(f, "utf8").split("\n");
+    let earlyReturn = -1;
+    let depth = 0;
+    lines.forEach((l, i) => {
+      if (/^  if\s*\(/.test(l)) depth = 1;
+      if (depth && /^\s{4,}return\s*\(/.test(l) && earlyReturn < 0) earlyReturn = i;
+      if (/^  \}/.test(l)) depth = 0;
+    });
+    if (earlyReturn < 0) continue;
+    lines.forEach((l, i) => {
+      const m = l.match(/\b(use[A-Z]\w*)\s*\(/);
+      if (m && i > earlyReturn && /^  (const|let)\b/.test(l)) {
+        assert.fail(`${relOf(f)}:${i + 1} calls ${m[1]}() after the early return on line ${earlyReturn + 1} — hoist it above that return`);
+      }
+    });
+  }
+});

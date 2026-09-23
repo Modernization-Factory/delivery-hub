@@ -43,6 +43,12 @@ export function TeamPlansView(ctx) {
   }
   const patchPlan = (id, fn) => setPlans(plans.map((p) => (p.id === id ? { ...fn({ ...p }), updatedAt: todayISO } : p)));
 
+  // Only the grid below uses these, but the hook must run on every render: the editor
+  // branch returns early, and opening a plan would otherwise drop usePaged's two
+  // useState calls mid-session — "Rendered fewer hooks than expected".
+  const visible = plans.filter((p) => showArch || !p.archived);
+  const { rows: visPage, pager: planPager } = usePaged(visible, 10);
+
   // ---------- editor ----------
   if (open) {
     const proj = projById[open.projectId] || { name: "?", streams: [] };
@@ -216,8 +222,6 @@ export function TeamPlansView(ctx) {
   }
 
   // ---------- manage grid ----------
-  const visible = plans.filter((p) => showArch || !p.archived);
-  const { rows: visPage, pager: planPager } = usePaged(visible, 10);
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
