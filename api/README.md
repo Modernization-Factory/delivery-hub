@@ -23,9 +23,12 @@ employee document; role derives from it per request (Stream Leads get Lead acces
 matrix stored in the `permissions` collection — same registry the frontend Admin panel uses.
 
 ## Post-seed checklist
-1. Backfill `employees.email` with Okta login emails (nobody can sign in until set).
-2. Set `isAdmin: true` for the admin PMs.
-3. Confirm partner staff (WeKan/Ciklum/Globant) hold Okta identities.
+`import-seed.js` reloads every employee with `email: null`, so sign-in must be recreated
+after each run:
+1. `node scripts/backfill-identities.js <mapping.json>` (dry run), then `--write`.
+   Ships `scripts/identities.local.json` for dev; copy `identities.example.json` for real
+   environments. Sets email + isAdmin/streamLead/viewer; update-only and idempotent.
+2. Confirm partner staff (WeKan/Ciklum/Globant) hold Okta identities.
 
 ## Kanopy notes
 - Probes: `GET /healthz` (liveness), `GET /readyz` (readiness — pings Mongo).

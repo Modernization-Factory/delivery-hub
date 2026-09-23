@@ -10,13 +10,15 @@ replacing the spreadsheet trackers it was reconciled from.
 .
 ├── api/                Express + MongoDB backend (the system of record)
 │   ├── src/            server, routes, auth, rules (shared business logic), integration API
-│   ├── scripts/        one-time data imports (seed.json, ph-seed.json)
+│   ├── scripts/        seed builders + importers, identity backfill (see 2.5)
 │   └── test/           business-rules test suite
 ├── web/                React frontend (Vite)
 │   ├── src/lib/        pure domain logic, unit-tested        (see web/README.md)
 │   ├── src/ui/         shared atoms + hooks
 │   ├── src/views/      one module per screen
 │   └── test/           unit, render-smoke and structure tests
+├── deploy/             Kanopy ingress reference (Okta vs. token-auth path split)
+├── raw-seed-files/     source .xlsx exports the seed is generated from
 └── delivery-hub.jsx    the original single-file prototype (historical reference only —
                         the live app is web/src, do not edit this)
 ```
@@ -75,12 +77,35 @@ Full variable list:
 Nobody can sign in until an employee record carries their email — the employee master is
 what authorizes, and the role comes from it (there is no role picker).
 
-```javascript
-// mongosh
-use deliveryhub
-db.employees.updateOne({ name: "Dushyant Sharma" }, { $set: { email: "dushyant@local.test", isAdmin: true } })
-db.employees.updateOne({ name: "Samriti" },        { $set: { email: "samriti@local.test" } })   // a Lead persona
+`npm run seed` reloads every employee with `email: null`, so this has to be redone after
+each reload. Keep the mapping in a file rather than retyping it:
+
+```bash
+node scripts/backfill-identities.js scripts/identities.local.json            # dry run
+node scripts/backfill-identities.js scripts/identities.local.json --write
 ```
+
+`scripts/identities.local.json` ships the two dev personas — `dushyant@local.test`
+(Admin) and `samriti@local.test` (Lead). Add your own the same way:
+
+```json
+{ "Employee Name": { "email": "you@local.test", "isAdmin": true } }
+```
+
+Names must match `employees.name` **exactly**. The script reports anything that doesn't
+match and exits non-zero — unlike a bare `db.employees.updateOne({ name: ... })`, which
+matches nothing and still reports success. Employee names change when the master is
+refreshed (e.g. "Samriti" became "Samriti Arora"), so that silent no-op is easy to hit.
+
+For a real environment, copy `scripts/identities.example.json`, fill in Okta login
+emails, and point the script at it:
+
+```bash
+MONGODB_URI="<atlas-uri>" node scripts/backfill-identities.js identities.prod.json --write
+```
+
+The script only ever updates `email`, `isAdmin`, `streamLead` and `viewer` on existing
+employees — it never inserts, deletes or drops, and re-running it is a no-op.
 
 ### 2.3 Web
 
@@ -103,6 +128,45 @@ node --env-file=.env scripts/import-program-health.js
 Idempotent. Imported rows carry `source: "ph-import"` and are wiped and reloaded on each
 run, so anything entered in-app survives. Projects are upserted by name and only register
 fields are touched — streams, funding and links are never overwritten.
+
+### 2.5 Refreshing the seed from the source workbooks
+
+`seed.json` and `ph-seed.json` are generated, not hand-edited. Drop the current exports
+into `raw-seed-files/` and rebuild:
+
+```bash
+cd api
+node scripts/build-seed.js                 # dry run: prints a per-dataset diff
+node scripts/build-seed.js --write
+node scripts/build-ph-seed.js              # dry run
+node scripts/build-ph-seed.js --write
+```
+
+Expected files in `raw-seed-files/`:
+
+| File | Feeds |
+|---|---|
+| `Leave Tracker.xlsx` | employees, leaves, comp-offs, holidays |
+| `Copy of Resource Allocation - Mar'26 ++.xlsx` | the `Timecard-Proactiveness` sheet |
+| `AMP APAC Program Health - v2.0.xlsx` | projects, weekly health, pipeline, RAID, milestones |
+
+Both builders parse through `src/rules.js` (`excelToISO`, `parseTimecardGrid`,
+`NAME_ALIASES`), so the seed is built by the same code as the in-app `.xlsx` import.
+
+**Always read the dry-run warnings.** The builders are deliberately non-destructive where
+the workbooks disagree with what is already seeded:
+
+- Allocations (`A`) and performance scores (`P`) have no workbook source and are carried
+  over verbatim.
+- A person still referenced by leave/comp-off/timecard/score history but missing from the
+  EMPLOYEES sheet is **carried forward** from the previous seed, not dropped — otherwise
+  `import-seed.js` throws on `orphan()` and the history is destroyed. Retiring someone for
+  real is a manual decision.
+- The Timecard-Proactiveness export has covered fewer people than the seed. Anyone absent
+  from it keeps their previous rows, re-aligned onto the new week axis **by date**, never
+  by position.
+- A project with weekly/RAID/milestone history but no row in the register is carried
+  forward, or its history would import with a null `projectId`.
 
 ---
 
@@ -199,9 +263,17 @@ migration. Never point it at a database that already holds live entries.
 
 Then:
 
-1. Backfill `employees.email` with Okta login emails (nobody can sign in until set).
-2. Set `isAdmin: true` on the admin PMs.
-3. Confirm partner staff (WeKan / Ciklum / Globant) hold Okta identities.
+1. Backfill sign-in identities — nobody can sign in until this is done. Copy
+   `scripts/identities.example.json`, fill in Okta login emails plus the `isAdmin` and
+   `streamLead` flags, then:
+   ```bash
+   MONGODB_URI="<atlas-uri>" node scripts/backfill-identities.js identities.prod.json          # dry run first
+   MONGODB_URI="<atlas-uri>" node scripts/backfill-identities.js identities.prod.json --write
+   ```
+   The dry run lists every name that doesn't match `employees.name`; resolve those before
+   writing. Re-running is a no-op, so it is safe after any future reload.
+2. Confirm partner staff (WeKan / Ciklum / Globant) hold Okta identities — they cannot
+   sign in without one, whatever the mapping file says.
 4. Smoke-test: `GET /healthz`, `GET /readyz`, then sign in and load Dashboard, Timecard and
    Program Health.
 
