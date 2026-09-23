@@ -4,8 +4,14 @@
  * In production behind Kanopy, the ingress injects the header / cookie
  * itself; the extra header from here is simply ignored or overwritten.
  */
-let identity = null;
-export function setIdentity(email) { identity = email; }
+// Persisted so a page refresh keeps the session; cleared on "Switch user".
+const IDENTITY_KEY = "deliveryhub.identity";
+let identity = localStorage.getItem(IDENTITY_KEY);
+export function setIdentity(email) {
+  identity = email;
+  if (email) localStorage.setItem(IDENTITY_KEY, email);
+  else localStorage.removeItem(IDENTITY_KEY);
+}
 export function getIdentity() { return identity; }
 
 export async function api(path, { method = "GET", body, formData } = {}) {

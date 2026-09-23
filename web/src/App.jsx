@@ -1,5 +1,5 @@
-import { useState, useMemo } from "react";
-import { api, setIdentity } from "./api";
+import { useState, useMemo, useEffect } from "react";
+import { api, setIdentity, getIdentity } from "./api";
 import { LayoutDashboard, Plane, CalendarDays, ListChecks, BarChart3, Clock, Table, TrendingUp, GitBranch, FolderKanban, Gauge, Hourglass, Users, Settings as SettingsIcon, Shield, Lock, ExternalLink, ClipboardList, Activity } from "lucide-react";
 import { STREAMS, activeAssignmentsOn } from "./lib/allocations.js";
 import { MODULES_V2, SEED } from "./lib/constants.js";
@@ -343,6 +343,17 @@ export default function App() {
   const [pipeline, setPipeline0] = useState([]); // program health: pre-project opportunities
   const todayISO = toISO(new Date());
 
+  // On refresh, restore the session from the saved identity instead of showing the login screen.
+  const [restoring, setRestoring] = useState(() => !!getIdentity());
+  useEffect(() => {
+    if (!restoring) return;
+    api("/me")
+      .then((me) => { setUser({ role: me.role, name: me.employee.name }); loadAll(me.role); })
+      .catch(() => setIdentity(null))
+      .finally(() => setRestoring(false));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (restoring) return null;
   if (!user) {
     return (
       <LoginLive
@@ -424,7 +435,7 @@ export default function App() {
               <span className="text-xs text-slate-400">·</span>
               <span className="text-xs text-slate-500">{user.role}</span>
             </div>
-            <Btn kind="ghost" small onClick={() => setUser(null)}>Switch user</Btn>
+            <Btn kind="ghost" small onClick={() => { setIdentity(null); setUser(null); }}>Switch user</Btn>
           </div>
         </div>
       </header>
