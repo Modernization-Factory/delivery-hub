@@ -1,0 +1,6 @@
+{
+  "_comment": "Copy to identities.<env>.json and fill in real Okta login emails. Names must match employees.name exactly. Partner staff (WeKan/Ciklum/Globant) use their own domains, so nothing is auto-derived.",
+  "Dushyant Sharma": { "email": "dushyant.sharma@mongodb.com", "isAdmin": true },
+  "Some Stream Lead": { "email": "first.last@mongodb.com", "streamLead": true },
+  "A Partner Engineer": { "email": "first.last@wekan.example" }
+}

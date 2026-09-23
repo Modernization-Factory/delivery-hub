@@ -1,0 +1,5 @@
+{
+  "_comment": "Local development personas only. Recreate sign-in after any import-seed.js reload: node scripts/backfill-identities.js scripts/identities.local.json --write",
+  "Dushyant Sharma": { "email": "dushyant@local.test", "isAdmin": true },
+  "Samriti Arora":   { "email": "samriti@local.test", "streamLead": true }
+}
