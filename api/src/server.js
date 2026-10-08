@@ -69,8 +69,13 @@ app.use((err, _req, res, _next) => {
   res.status(status).json({ error: status >= 500 ? "internal" : err.message, detail: err.detail || err.message });
 });
 
-db.connect().then(() => {
-  app.listen(cfg.PORT, () => console.log(`DeliveryHub API on :${cfg.PORT} (auth mode: ${cfg.AUTH_MODE})`));
-}).catch((e) => { console.error("Mongo connection failed:", e.message); process.exit(1); });
+// Listen before Mongo is up: /healthz must answer so the liveness probe doesn't kill the
+// pod while the driver is still selecting a server (30s), which would hide the real
+// error. /readyz stays 503 until the connection succeeds, so no traffic arrives early.
+app.listen(cfg.PORT, () => console.log(`DeliveryHub API on :${cfg.PORT} (auth mode: ${cfg.AUTH_MODE})`));
+db.connect().then(() => console.log("Mongo connected")).catch((e) => {
+  console.error("Mongo connection failed:", e.message);
+  process.exit(1);
+});
 
 process.on("SIGTERM", async () => { await db.close(); process.exit(0); });
