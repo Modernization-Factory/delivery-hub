@@ -18,6 +18,7 @@ function col(name) {
 }
 
 async function ready() {
+  if (!db) return false;
   try {
     await db.command({ ping: 1 });
     return true;
