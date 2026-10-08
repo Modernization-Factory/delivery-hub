@@ -1,0 +1,32 @@
+mesh:
+  enabled: true
+
+# ── Probes ───────────────────────────────────────────────────────────────────
+# /readyz pings Mongo and returns 503 when it is unreachable.
+probes:
+  enabled: true
+  liveness:
+    path: /healthz
+  readiness:
+    path: /readyz
+
+# ── Non-secret environment variables ─────────────────────────────────────────
+env:
+  PORT: "8080"
+  DB_NAME: deliveryhub
+  AUTH_MODE: proxy-headers
+  IDENTITY_HEADER: x-kanopy-internal-authorization
+  IDENTITY_CLAIM: email
+  IDENTITY_JWKS_URL: https://login.staging.corp.mongodb.com/.well-known/jwks.json
+  IDENTITY_ISSUER: login.corp.mongodb.com     # same string in staging and production
+  # IDENTITY_AUDIENCE deliberately unset: Kanopy internal tokens carry no aud claim.
+  APP_URL: https://delivery-hub.amp-delivery.staging.corp.mongodb.com
+
+# ── Secret environment variables ─────────────────────────────────────────────
+# Stored in the 'delivery-hub-creds' Kubernetes Secret. Create / rotate with:
+#   kubectl config use-context api.staging.corp.mongodb.com
+#   helm ksec set delivery-hub-creds MONGODB_URI='mongodb+srv://<user>:<pass>@<host>/?appName=<app>'
+# Add INTEGRATION_TOKENS to the same secret (and below) once the Program Health
+# feed is enabled — see deploy/kanopy.reference.yaml.
+envSecrets:
+  MONGODB_URI: delivery-hub-creds
