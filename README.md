@@ -331,9 +331,37 @@ So a push or merge to **`main`** builds the image and rolls the deployment.
 > the Kanopy/Drone configuration must be re-pointed to `main` — otherwise the pipeline
 > waits on a branch that no longer exists here.
 
-> **`.drone.yml` does not exist in this repository yet.** Until it is added, pushing to
-> `main` builds nothing and deploys nothing; the image has to be built and pushed by
-> hand (5.1). This is the last piece of the deployment path still missing.
+The pipeline mirrors amp-delivery-estimator: one `publish` step (kaniko → ECR
+`amp-delivery/<repo>`, tagged `git-<sha7>` and `latest`) and one `deploy-staging` step
+(`mongodb/web-app` chart 4.25.0, release `delivery-hub`, namespace `amp-delivery`, host
+`delivery-hub.amp-delivery.staging.corp.mongodb.com`). Environment values, probes and the
+secret reference live in `environments/staging.yaml`.
+
+One-time setup before the first merge to `main`:
+
+1. Activate the repo in Drone and add three secrets under the repo's Drone settings
+   (same names as amp-delivery-estimator). All three are read from the **staging**
+   cluster, `amp-delivery` namespace:
+   ```bash
+   kubectl config use-context api.staging.corp.mongodb.com
+   kubectl config set-context api.staging.corp.mongodb.com --namespace=amp-delivery
+   ```
+
+   | Drone secret | Command |
+   | --- | --- |
+   | `staging_kubernetes_token` | `kubectl get secret kanopy-cicd-token -o jsonpath="{.data.token}" \| base64 --decode && echo` |
+   | `ecr_access_key` | `kubectl get secret ecr -o jsonpath="{.data.ecr_access_key}" \| base64 --decode && echo` |
+   | `ecr_secret_key` | `kubectl get secret ecr -o jsonpath="{.data.ecr_secret_key}" \| base64 --decode && echo` |
+
+   Paste each value straight into Drone; don't commit it or share it in chat.
+2. Create the Mongo secret in the namespace:
+   ```bash
+   kubectl config use-context api.staging.corp.mongodb.com
+   helm ksec set delivery-hub-creds MONGODB_URI='<atlas-uri>'
+   ```
+3. Make sure the Atlas project allows the Kanopy egress IP (otherwise `/readyz` stays 503
+   and the pod never becomes ready).
+4. Register the Okta `clientPrincipals` in the service catalog entry (5.3).
 
 Two consequences worth holding onto:
 
@@ -345,8 +373,7 @@ Two consequences worth holding onto:
 
 ### 5.6 Upgrades
 
-Push a new image tag and roll the deployment — or, once the pipeline exists, merge to
-`main`. Application data lives entirely in MongoDB; no build step touches it, and
+Merge to `main`; Drone builds a new image tag and rolls the deployment. Application data lives entirely in MongoDB; no build step touches it, and
 no seed script should be re-run on an established database.
 
 ---

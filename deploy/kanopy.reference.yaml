@@ -67,8 +67,8 @@ env:
 #
 # main is a deploying branch: anything merged into it ships. The trigger was
 # delivery-hub while this lived in the amp-pm-apac monorepo; re-point the Kanopy/Drone
-# config to main now that it has its own repository. NOTE: .drone.yml is still not in
-# the repo, so nothing is triggered today and images must be built and pushed by hand.
+# config to main now that it has its own repository. The live config is .drone.yml +
+# environments/staging.yaml; this file stays as the reference for Okta and the carve-out.
 
 # ---------------------------------------------------------------------------
 # Probes
