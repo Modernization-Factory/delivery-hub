@@ -54,6 +54,7 @@ export function AdminPanel(ctx) {
           </table>
         </div>
       </Card>
+      <AdminAccessCard {...ctx} />
       <ExtLinksCard {...ctx} />
       <Card title="Shipped in v2.3 — Remaining Runway">
         <p className="text-sm text-slate-700">Per-role runway per project, reproducing the source sheet's model with its bugs fixed: remaining billable hours ÷ weekly burn (headcount × 40 h, per-assignment overrides honoured — e.g. the three 48 h/week developers), projected from the week anchor with real working-day math. Remaining hours are derived from allocations (8 h per working day, day-weighted across concurrent projects, from the funding start) with per-role manual overrides for finance corrections. The last date is extended by real approved leave — fixing the source formula that passed a leave-day count where WORKDAY expects holiday dates, so forecasts never actually shifted anything. Pricing rows from the source sheet remain excluded.</p>
@@ -73,6 +74,55 @@ export function AdminPanel(ctx) {
         </ul>
       </Card>
     </div>
+  );
+}
+
+// Grant / revoke Admin access. The server refuses self-revocation, so one Admin always remains.
+export function AdminAccessCard(ctx) {
+  const { employees, user, todayISO, setEmployeeAdmin } = ctx;
+  const [pick, setPick] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const admins = employees.filter((e) => e.isAdmin);
+  const candidates = employees.filter((e) => !e.isAdmin && e.email && isActiveDuring(e, todayISO, todayISO));
+  async function change(emp, isAdmin) {
+    setMsg(null); setBusy(true);
+    try {
+      await setEmployeeAdmin(emp.id, isAdmin);
+      setMsg({ tone: "success", text: emp.name + (isAdmin ? " is now an Admin." : " is no longer an Admin.") });
+      if (isAdmin) setPick("");
+    } catch (e) {
+      setMsg({ tone: "error", text: e.message });
+    } finally { setBusy(false); }
+  }
+  return (
+    <Card title={"Admin access (" + admins.length + ")"}>
+      <p className="mb-3 text-sm text-slate-500">Admins have every capability, including this screen. Only active employees with an email on record can be made Admin. You can't remove your own access — ask another Admin.</p>
+      <div className="flex flex-wrap items-end gap-3">
+        <Field label="Make an employee Admin">
+          <select className={inputCls} value={pick} onChange={(e) => setPick(e.target.value)}>
+            <option value="">Select an employee…</option>
+            {candidates.map((e) => <option key={e.id} value={e.id}>{e.name} — {e.email}</option>)}
+          </select>
+        </Field>
+        <Btn small disabled={!pick || busy} onClick={() => { const emp = employees.find((e) => e.id === pick); if (emp && window.confirm("Give " + emp.name + " full Admin access?")) change(emp, true); }}>Make Admin</Btn>
+      </div>
+      {msg && <div className="mt-2"><Notice tone={msg.tone}>{msg.text}</Notice></div>}
+      {admins.length > 0 && (
+        <ul className="mt-3 divide-y divide-slate-100">
+          {admins.map((a) => (
+            <li key={a.id} className="flex items-center justify-between py-2 text-sm">
+              <span>
+                <span className="font-medium text-slate-800">{a.name}</span>
+                <span className="ml-2 text-xs text-slate-400">{a.email}</span>
+                {a.name === user.name && <span className="ml-2 text-xs text-slate-500">(you)</span>}
+              </span>
+              {a.name !== user.name && <Btn small kind="danger" disabled={busy} onClick={() => { if (window.confirm("Remove Admin access from " + a.name + "?")) change(a, false); }}>Remove Admin</Btn>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
   );
 }
 

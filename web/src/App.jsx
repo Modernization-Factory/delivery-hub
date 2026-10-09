@@ -5,7 +5,7 @@ import { STREAMS, activeAssignmentsOn } from "./lib/allocations.js";
 import { MODULES_V2, SEED } from "./lib/constants.js";
 import { toISO } from "./lib/dates.js";
 import { canDo, defaultPerms, mergePerms } from "./lib/permissions.js";
-import { Btn, Notice } from "./ui/atoms.jsx";
+import { Notice } from "./ui/atoms.jsx";
 import { BRAND_CSS, BRAND_FONT, Leaf } from "./ui/brand.jsx";
 import { AdminPanel } from "./views/Admin.jsx";
 import { AllLeaveRecords } from "./views/AllLeaveRecords.jsx";
@@ -141,7 +141,7 @@ export default function App() {
     const es = await api("/employees").catch(() => null);
     let empNameById = {};
     if (es) {
-      setEmployees0(es.map((e) => ({ id: String(e.id), name: e.name, email: e.email || "", role: e.role, company: e.company, start: e.start, term: e.term, streamLead: !!e.streamLead, viewer: !!e.viewer, custom: e.custom || {} })));
+      setEmployees0(es.map((e) => ({ id: String(e.id), name: e.name, email: e.email || "", role: e.role, company: e.company, start: e.start, term: e.term, streamLead: !!e.streamLead, viewer: !!e.viewer, isAdmin: !!e.isAdmin, custom: e.custom || {} })));
       empNameById = Object.fromEntries(es.map((e) => [String(e.id), e.name]));
       setSrvMaps((m) => ({ ...m, empIdByName: Object.fromEntries(es.map((e) => [e.name, String(e.id)])) }));
     }
@@ -197,6 +197,11 @@ export default function App() {
       update: (e) => fire(api("/employees/" + e.id, { method: "PUT", body: { name: e.name, email: e.email || null, role: e.role, company: e.company, start: e.start, term: e.term, streamLead: !!e.streamLead, viewer: !!e.viewer, custom: e.custom || {} } })),
     });
   };
+  // Admin grants go through their own endpoint (not PUT /employees), so update local state directly.
+  async function setEmployeeAdmin(id, isAdmin) {
+    await api("/admin/employees/" + id + "/admin", { method: "PUT", body: { isAdmin } });
+    setEmployees0((es) => es.map((e) => (e.id === id ? { ...e, isAdmin } : e)));
+  }
   const setProjects = (next) => {
     const prev = projects; setProjects0(next);
     diffSync(prev, next, {
@@ -348,7 +353,11 @@ export default function App() {
   useEffect(() => {
     if (!restoring) return;
     api("/me")
-      .then((me) => { setUser({ role: me.role, name: me.employee.name }); loadAll(me.role); })
+      .then((me) => {
+        // A saved address that isn't the authenticated (Okta) identity goes back to login.
+        if (me.email && me.email !== getIdentity()) throw new Error("identity_mismatch");
+        setUser({ role: me.role, name: me.employee.name }); loadAll(me.role);
+      })
       .catch(() => setIdentity(null))
       .finally(() => setRestoring(false));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -359,7 +368,16 @@ export default function App() {
       <LoginLive
         onEnter={async (email) => {
           setIdentity(email);
-          const me = await api("/me");
+          let me;
+          try { me = await api("/me"); } catch (e) { setIdentity(null); throw e; }
+          // On Kanopy the ingress decides who the caller is and the typed address is
+          // ignored, so refuse to continue when the two disagree.
+          if (me.email && me.email !== email) {
+            setIdentity(null);
+            const e = new Error("You're signed in through Okta as " + me.email + ". Enter your own email address to continue.");
+            e.status = 403;
+            throw e;
+          }
           setUser({ role: me.role, name: me.employee.name });
           setNav("dash");
           loadAll(me.role);
@@ -412,7 +430,7 @@ export default function App() {
     setTcWeeks, assignments, setAssignments, projects, setProjects, jiraFlags,
     scores, setScores, perfCfg, setPerfCfg, can, perms, setPerms, extLinks, setExtLinks, plans, setPlans, empFields, setEmpFields, raid, setRaid, milestones, setMilestones, weeklyHealth, setWeeklyHealth, pipeline, setPipeline, uploadTimecardFile,
     todayISO, canManage, canConfigure, isDev, isAdmin,
-    setLeaves, setComps, setTcRows, setEmployees, setLeaveTypes, setWeekendDays, setHolidays, nextId, setNav,
+    setLeaves, setComps, setTcRows, setEmployees, setLeaveTypes, setWeekendDays, setHolidays, nextId, setNav, setEmployeeAdmin,
   };
 
   return (
@@ -435,7 +453,6 @@ export default function App() {
               <span className="text-xs text-slate-400">·</span>
               <span className="text-xs text-slate-500">{user.role}</span>
             </div>
-            <Btn kind="ghost" small onClick={() => { setIdentity(null); setUser(null); }}>Switch user</Btn>
           </div>
         </div>
       </header>

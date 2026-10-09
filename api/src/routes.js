@@ -57,8 +57,11 @@ function leaveCtx(s) {
 const empShape = (e) => ({ id: e._id, name: e.name, email: e.email, role: e.role, streamLead: !!e.streamLead, viewer: !!e.viewer, isAdmin: !!e.isAdmin, company: e.company, start: iso(e.startDate), term: iso(e.endDate), custom: e.custom || {} });
 
 // ---------- me ----------
+// `email` is the identity the request was authenticated as (the Okta claim on Kanopy),
+// so the login screen can tell a user who typed someone else's address apart from
+// one who typed their own.
 router.get("/me", async (req, res) => {
-  res.json({ employee: empShape(req.user.employee), role: req.user.role });
+  res.json({ employee: empShape(req.user.employee), role: req.user.role, email: req.user.email });
 });
 
 // ---------- employees ----------
@@ -514,6 +517,17 @@ router.get("/admin/permissions", requireAdmin, async (_req, res) => {
 });
 router.put("/admin/permissions", requireAdmin, audit("permissions.update"), async (req, res) => {
   await col("permissions").updateOne({ _id: "global" }, { $set: { perms: req.body.perms, updatedAt: new Date(), updatedBy: req.user.employee.name } }, { upsert: true });
+  res.json({ ok: true });
+});
+// Grant or revoke Admin. Admins cannot revoke themselves, which also guarantees at
+// least one Admin always remains.
+router.put("/admin/employees/:id/admin", requireAdmin, audit("employee.setAdmin"), async (req, res) => {
+  const id = oid(req.params.id);
+  const isAdmin = req.body && req.body.isAdmin;
+  if (typeof isAdmin !== "boolean") return res.status(422).json({ error: "isAdmin_must_be_boolean" });
+  if (!isAdmin && id.equals(req.user.employee._id)) return res.status(422).json({ error: "cannot_revoke_self", detail: "You can't remove your own Admin access — ask another Admin." });
+  const r = await col("employees").updateOne({ _id: id }, { $set: { isAdmin, updatedAt: new Date(), updatedBy: req.user.employee.name } });
+  if (!r.matchedCount) return res.status(404).json({ error: "employee_not_found" });
   res.json({ ok: true });
 });
 router.get("/audit", requireAdmin, async (req, res) => {
