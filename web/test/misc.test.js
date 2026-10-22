@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { pageSlice } from "../src/lib/paging.js";
 import { planCalc, planMonths } from "../src/lib/plans.js";
 import { appRoleOf } from "../src/lib/roles.js";
-import { canDo, defaultPerms, mergePerms, appRoleForEmp, ROLES } from "../src/lib/permissions.js";
+import { canDo, defaultPerms, mergePerms, appRoleForEmp, canDeletePastLeave, ROLES } from "../src/lib/permissions.js";
 import { perfResourceTrend, perfScorecard, perfVendorTrend, ragOf, starsOf, weightedScore } from "../src/lib/performance.js";
 import { PERF_CFG } from "./fixtures.js";
 
@@ -149,4 +149,10 @@ test("perfResourceTrend returns one person's history in week order", () => {
   assert.deepEqual(t.map((x) => x.score), [5, 4]);
   assert.equal(t[1].stars, 4);
   assert.deepEqual(perfResourceTrend(scores, "Nobody", PERF_CFG), []);
+});
+
+test("only PM and Admin can delete leave whose start date has passed", () => {
+  assert.equal(canDeletePastLeave("Project Manager"), true);
+  assert.equal(canDeletePastLeave("Admin"), true);
+  ["Lead", "Senior Developer", "Developer", "Viewer"].forEach((r) => assert.equal(canDeletePastLeave(r), false));
 });

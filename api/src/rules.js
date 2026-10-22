@@ -299,6 +299,10 @@ function starsOf(score) {
 function ragOf(score, cfg) {
   return score === null ? null : score >= cfg.green ? "Green" : score >= cfg.amber ? "Amber" : "Red";
 }
+// leave whose start date has passed is locked — only PM / Admin may delete it
+function canDeletePastLeave(role) {
+  return role === "Project Manager" || role === "Admin";
+}
 // effective app role: Lead Developer OR designated Stream Lead -> Lead
 function appRoleForEmp(e) {
   if (e.viewer) return "Viewer"; // read-only persona, regardless of PS role
@@ -678,7 +682,7 @@ module.exports = {
   TC_STATUSES, METRICS, STREAMS, NAME_ALIASES, PERM_GROUPS, PARTNER_COS, OPEN_END, RUNWAY_ROLES,
   parseISO, toISO, isWeekend, isWorkingDay, workingDaysBetween, monthRange,
   leaveDays, leaveDaysInRange, isDuplicate, findOverlaps, compOffDateValid, balancesFor, onLeaveOn,
-  isActiveDuring, appRoleOf, appRoleForEmp,
+  isActiveDuring, appRoleOf, appRoleForEmp, canDeletePastLeave,
   tcStats, tcStatsFlex, weekCompliance, weekComplianceFlex, tcSuggested,
   excelToISO, parseTimecardGrid,
   aOverlaps, crossProjectConcurrent, activeAssignmentsOn, effortSplitInMonth, assignmentDaysInMonth, streamsInMonth, currentStream,

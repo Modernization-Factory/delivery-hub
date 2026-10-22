@@ -38,5 +38,7 @@ eq("scorecard-partners", sc.rows.every(r => R.PARTNER_COS.includes(r.vendor)), t
 eq("scorecard-rag-sum", Object.values(sc.vendors).reduce((a, v) => a + v.Green + v.Amber + v.Red, 0), sc.rows.filter(r => r.score !== null).length);
 // role model
 eq("streamlead-role", R.appRoleForEmp({ role: "Senior Developer", streamLead: true }), "Lead");
+eq("past-leave-pm", R.canDeletePastLeave("Project Manager"), true);
+eq("past-leave-lead", R.canDeletePastLeave("Lead"), false);
 console.log("SERVER RULES TESTS — PASS:", pass, "FAIL:", fail);
 process.exit(fail ? 1 : 0);

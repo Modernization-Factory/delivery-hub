@@ -319,6 +319,10 @@ export default function App() {
     const h = typeof window !== "undefined" && window.location.hash ? window.location.hash.slice(1) : "";
     return NAV_DEEPLINK.includes(h) ? h : "dash";
   });
+  // mirror the current page into the URL hash so a browser refresh stays on it
+  useEffect(() => {
+    if (NAV_DEEPLINK.includes(nav) && window.location.hash.slice(1) !== nav) window.history.replaceState(null, "", "#" + nav);
+  }, [nav]); // eslint-disable-line react-hooks/exhaustive-deps
   const [idc, setIdc] = useState(1000);
   const nextId = (p) => { setIdc(idc + 1); return p + (idc + 1); };
 

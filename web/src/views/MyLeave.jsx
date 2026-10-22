@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { fmt, fmtShort } from "../lib/dates.js";
 import { LEAVE_COLORS, balancesFor, findOverlaps, isDuplicate, leaveDays } from "../lib/leave.js";
+import { canDeletePastLeave } from "../lib/permissions.js";
 import { Btn, Card, Field, Notice, Pill, Stat, inputCls } from "../ui/atoms.jsx";
 import { BRAND_FONT } from "../ui/brand.jsx";
 
@@ -18,6 +19,7 @@ export function MyLeave(ctx) {
 
   const canForAnyone = ctx.can("leave.forAnyone");
   const canOwn = ctx.can("leave.own");
+  const canDelete = (l) => (canForAnyone || (canOwn && l.name === user.name)) && (l.start >= todayISO || canDeletePastLeave(user.role));
   const target = canForAnyone ? who : user.name;
   const bal = balancesFor(target, leaves, comps, leaveTypes, weekendDays, holidaySet);
   const my = leaves.filter((l) => l.name === target).sort((a, b) => b.start.localeCompare(a.start));
@@ -117,7 +119,7 @@ export function MyLeave(ctx) {
                     <td className="py-2 pr-4"><Pill tone={LEAVE_COLORS[l.type] || "bg-slate-100 text-slate-600"}>{l.type}</Pill></td>
                     <td className="py-2 pr-4">{leaveDays(l.start, l.end, l.type, leaveTypes, weekendDays, holidaySet)}</td>
                     <td className="py-2 text-right">
-                      {(canForAnyone || (canOwn && l.name === user.name)) && <Btn small kind="danger" onClick={() => remove(l.id)}>Delete</Btn>}
+                      {canDelete(l) && <Btn small kind="danger" onClick={() => remove(l.id)}>Delete</Btn>}
                     </td>
                   </tr>
                 ))}
