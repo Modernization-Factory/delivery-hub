@@ -123,6 +123,7 @@ router.delete("/leaves/:id", audit("leave.delete"), async (req, res) => {
   if (!l) return res.status(404).json({ error: "not_found" });
   const own = String(l.employeeId) === String(req.user.employee._id);
   if (!own && !req.can("leave.forAnyone")) return res.status(403).json({ error: "forbidden" });
+  if (R.toISO(l.start) < R.toISO(new Date()) && !R.canDeletePastLeave(req.user.role)) return res.status(403).json({ error: "past_leave_locked", detail: "Leave that has already started can only be deleted by a PM or Admin." });
   await col("leaves").deleteOne({ _id: l._id });
   res.json({ ok: true });
 });

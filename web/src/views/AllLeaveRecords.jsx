@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { fmtShort } from "../lib/dates.js";
 import { LEAVE_COLORS, leaveDays } from "../lib/leave.js";
+import { canDeletePastLeave } from "../lib/permissions.js";
 import { Btn, Card, Pill, inputCls } from "../ui/atoms.jsx";
 import { BRAND_FONT } from "../ui/brand.jsx";
 import { usePaged } from "../ui/usePaged.jsx";
@@ -9,7 +10,8 @@ import { usePaged } from "../ui/usePaged.jsx";
 // ALL LEAVE RECORDS (Lead / PM / Admin)
 // ============================================================
 export function AllLeaveRecords(ctx) {
-  const { leaves, leaveTypes, weekendDays, holidaySet, setLeaves, empByName } = ctx;
+  const { leaves, leaveTypes, weekendDays, holidaySet, setLeaves, empByName, user, todayISO } = ctx;
+  const canDeletePast = canDeletePastLeave(user.role);
   const [q, setQ] = useState("");
   const [ft, setFt] = useState("All");
   const rows = leaves
@@ -43,7 +45,7 @@ export function AllLeaveRecords(ctx) {
                   <td className="py-1.5 pr-4">{fmtShort(l.start)}{l.start !== l.end ? " – " + fmtShort(l.end) : ""}</td>
                   <td className="py-1.5 pr-4"><Pill tone={LEAVE_COLORS[l.type] || "bg-slate-100 text-slate-600"}>{l.type}</Pill></td>
                   <td className="py-1.5 pr-4">{leaveDays(l.start, l.end, l.type, leaveTypes, weekendDays, holidaySet)}</td>
-                  <td className="py-1.5 text-right"><Btn small kind="danger" onClick={() => setLeaves(leaves.filter((x) => x.id !== l.id))}>Delete</Btn></td>
+                  <td className="py-1.5 text-right">{(l.start >= todayISO || canDeletePast) && <Btn small kind="danger" onClick={() => setLeaves(leaves.filter((x) => x.id !== l.id))}>Delete</Btn>}</td>
                 </tr>
               ))}
             </tbody>

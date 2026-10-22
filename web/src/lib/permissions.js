@@ -72,6 +72,11 @@ export function canDo(perms, role, cap) {
   return p ? !!p[role] : false;
 }
 
+// leave whose start date has passed is locked — only PM / Admin may delete it
+export function canDeletePastLeave(role) {
+  return role === "Project Manager" || role === "Admin";
+}
+
 // effective app role: Lead Developer OR designated Stream Lead -> Lead
 export function appRoleForEmp(e) {
   if (e.viewer) return "Viewer"; // read-only persona, regardless of PS role
