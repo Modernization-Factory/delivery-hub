@@ -444,7 +444,7 @@ export default function App() {
             <div className="flex h-9 w-9 items-center justify-center rounded-lg" style={{ backgroundColor: "#001E2B" }}><Leaf size={22} /></div>
             <div>
               <div className="text-sm font-semibold leading-tight text-slate-900" style={{ fontFamily: BRAND_FONT }}>DeliveryHub</div>
-              <div className="text-xs leading-tight text-slate-500">AMP · APAC — unified tracker console</div>
+              <div className="text-xs leading-tight text-slate-500">AMP · APAC — UNIFIED TRACKER CONSOLE</div>
             </div>
           </div>
           <div className="flex items-center gap-3">
