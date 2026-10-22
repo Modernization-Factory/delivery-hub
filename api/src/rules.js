@@ -304,11 +304,13 @@ function appRoleForEmp(e) {
   if (e.viewer) return "Viewer"; // read-only persona, regardless of PS role
   if (e.role === "Project Manager") return "Project Manager";
   if (e.role === "Lead Developer" || e.streamLead) return "Lead";
+  if (e.role === "Senior Developer") return "Senior Developer";
   return "Developer";
 }
 
 // ---- Permission registry: module-level groups, capability-level entries, role defaults ----
-// (D = Developer, L = Lead incl. Stream Leads, P = Project Manager; Admin always has everything)
+// (D = Developer, S = Senior Developer, L = Lead incl. Stream Leads, P = Project Manager; Admin always has everything;
+// S falls back to D when omitted)
 const PERM_GROUPS = [
   { module: "Leave", caps: [
     ["leave.own", "Submit own leave · delete own entries", { D: 1, L: 1, P: 1, V: 0 }],
@@ -356,14 +358,19 @@ const PERM_GROUPS = [
 ];
 function defaultPerms() {
   const o = {};
-  PERM_GROUPS.forEach((g) => g.caps.forEach(([id, _l, d]) => { o[id] = { Developer: !!d.D, Lead: !!d.L, "Project Manager": !!d.P, Viewer: !!d.V }; }));
+  PERM_GROUPS.forEach((g) => g.caps.forEach(([id, _l, d]) => { o[id] = { Developer: !!d.D, "Senior Developer": !!(d.S ?? d.D), Lead: !!d.L, "Project Manager": !!d.P, Viewer: !!d.V }; }));
   return o;
 }
 // stored permission docs from before a capability/role existed lack keys — merge defaults under them
 function mergePerms(stored) {
   const base = defaultPerms();
   const out = {};
-  Object.keys(base).forEach((cap) => { out[cap] = { ...base[cap], ...((stored || {})[cap] || {}) }; });
+  Object.keys(base).forEach((cap) => {
+    const s = (stored || {})[cap] || {};
+    // Senior Developer split out of Developer later — until saved, it mirrors the stored Developer setting
+    const sd = "Senior Developer" in s ? {} : "Developer" in s ? { "Senior Developer": s.Developer } : {};
+    out[cap] = { ...base[cap], ...s, ...sd };
+  });
   return out;
 }
 function canDo(perms, role, cap) {
