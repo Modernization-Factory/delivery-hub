@@ -78,6 +78,18 @@ test("mergePerms keeps stored overrides but backfills new capabilities", () => {
 test("appRoleForEmp derives the app role from the employee master", () => {
   assert.equal(appRoleForEmp({ role: "Project Manager" }), "Project Manager");
   assert.equal(appRoleForEmp({ role: "Developer" }), "Developer");
+  assert.equal(appRoleForEmp({ role: "Senior Developer" }), "Senior Developer");
+  assert.equal(appRoleForEmp({ role: "Senior Developer", streamLead: true }), "Lead");
+});
+
+test("Senior Developer defaults to the Developer column and inherits stored Developer overrides", () => {
+  const perms = defaultPerms();
+  assert.equal(canDo(perms, "Senior Developer", "leave.own"), true);
+  assert.equal(canDo(perms, "Senior Developer", "timecard.insights"), false);
+  const merged = mergePerms({ "alloc.view": { Developer: true }, "leave.own": { Developer: true, "Senior Developer": false } });
+  assert.equal(canDo(merged, "Senior Developer", "alloc.view"), true);
+  assert.equal(canDo(merged, "Senior Developer", "leave.own"), false); // its own saved value wins
+  assert.ok(ROLES.includes("Senior Developer"));
 });
 
 test("weightedScore needs all six metrics and honours the weights", () => {

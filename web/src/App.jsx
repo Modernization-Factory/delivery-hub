@@ -73,7 +73,7 @@ export default function App() {
     setLeaves0(ls.map((l) => ({ id: String(l.id), name: empNameById[String(l.employeeId)], start: dstr(l.start), end: dstr(l.end), type: l.type })).filter((l) => l.name));
   }
   async function loadComps(empNameById) {
-    const cs = await api("/compoffs");
+    const cs = await api("/compoffs").catch((e) => (e.status === 403 ? api("/compoffs?mine=1") : Promise.reject(e)));
     setComps0(cs.map((c) => ({ id: String(c._id), name: empNameById[String(c.employeeId)], date: dstr(c.dateWorked), days: c.days, reason: c.reason || "" })).filter((c) => c.name));
   }
   async function loadTimecards(empNameById) {
@@ -397,8 +397,9 @@ export default function App() {
   }
 
 
-  const isDev = user.role === "Developer";
   const can = (cap) => canDo(perms, user.role, cap);
+  // roles that can't see the whole timecard grid get their own row only ("My Timecard")
+  const isDev = !can("timecard.editAll") && !can("timecard.insights");
   const isLead = user.role === "Lead";
   const isPM = user.role === "Project Manager";
   const isAdmin = user.role === "Admin";

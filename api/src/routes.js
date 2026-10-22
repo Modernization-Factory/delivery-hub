@@ -65,8 +65,12 @@ router.get("/me", async (req, res) => {
 });
 
 // ---------- employees ----------
-router.get("/employees", requireCap("employees.view"), async (_req, res) => {
-  res.json((await col("employees").find().sort({ name: 1 }).toArray()).map(empShape));
+// Without employees.view the caller still gets a name directory (no email / custom fields) —
+// every role needs it to resolve names on their own leave, timecard and the team calendar.
+const dirShape = (e) => ({ id: e._id, name: e.name, role: e.role, company: e.company, start: iso(e.startDate), term: iso(e.endDate) });
+router.get("/employees", async (req, res) => {
+  const all = await col("employees").find().sort({ name: 1 }).toArray();
+  res.json(all.map(req.can("employees.view") ? empShape : dirShape));
 });
 router.post("/employees", requireCap("employees.edit"), audit("employee.create"), async (req, res) => {
   const { name, email, role, company, start, term, streamLead, viewer, custom } = req.body;
@@ -124,8 +128,12 @@ router.delete("/leaves/:id", audit("leave.delete"), async (req, res) => {
 });
 
 // ---------- comp-off ----------
-router.get("/compoffs", requireCap("leave.compoff"), async (_req, res) => {
-  res.json(await col("compOffs").find().sort({ dateWorked: -1 }).toArray());
+router.get("/compoffs", async (req, res) => {
+  // everyone can read their own comp-off (for My Leave balances); the full log needs leave.compoff
+  const mine = req.query.mine === "1";
+  if (!mine && !req.can("leave.compoff")) return res.status(403).json({ error: "forbidden" });
+  const q = mine ? { employeeId: req.user.employee._id } : {};
+  res.json(await col("compOffs").find(q).sort({ dateWorked: -1 }).toArray());
 });
 router.post("/compoffs", requireCap("leave.compoff"), audit("compoff.create"), async (req, res) => {
   const { employeeId, dateWorked, days, reason } = req.body;
