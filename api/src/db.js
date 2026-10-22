@@ -7,7 +7,13 @@ let client, db;
 async function connect() {
   if (db) return db;
   client = new MongoClient(cfg.MONGODB_URI, { maxPoolSize: 20 });
-  await client.connect();
+  try {
+    await client.connect();
+  } catch (err) {
+    await client.close().catch(() => {});
+    client = null;
+    throw err;
+  }
   db = client.db(cfg.DB_NAME);
   return db;
 }
