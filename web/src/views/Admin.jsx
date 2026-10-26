@@ -10,13 +10,13 @@ import { BRAND_FONT } from "../ui/brand.jsx";
 // ADMIN PANEL
 // ============================================================
 export function AdminPanel(ctx) {
-  const { employees, leaves, comps, tcRows, tcWeeks, todayISO } = ctx;
-  const activeCount = employees.filter((e) => isActiveDuring(e, todayISO, todayISO)).length;
+  const { allEmployees: employees, leaves, comps, tcRows, tcWeeks, todayISO } = ctx;
+  const activeCount = employees.filter((e) => !e.inactive && isActiveDuring(e, todayISO, todayISO)).length;
   return (
     <div className="space-y-5">
       <h2 className="text-xl font-semibold text-slate-900" style={{ fontFamily: BRAND_FONT }}>Administration</h2>
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Stat label="Employees" value={employees.length} sub={activeCount + " active today (end dates respected)"} />
+        <Stat label="Employees" value={employees.length} sub={activeCount + " active today (end dates and Inactive flag respected)"} />
         <Stat label="Leave records" value={leaves.length} />
         <Stat label="Comp-off entries" value={comps.length} />
         <Stat label="Timecard rows" value={tcRows.length} sub={tcWeeks.length + " weeks · " + ctx.assignments.length + " assignments · " + ctx.scores.length + " perf scores"} />
@@ -68,7 +68,7 @@ export function AdminAccessCard(ctx) {
   const [pick, setPick] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
-  const admins = employees.filter((e) => e.isAdmin);
+  const admins = ctx.allEmployees.filter((e) => e.isAdmin);
   const candidates = employees.filter((e) => !e.isAdmin && e.email && isActiveDuring(e, todayISO, todayISO));
   async function change(emp, isAdmin) {
     setMsg(null); setBusy(true);

@@ -92,3 +92,12 @@ test("computeBurn counts active-but-unassigned people", () => {
   assert.equal(july.active, 2);
   assert.equal(july.unalloc, 1);
 });
+
+test("computeBurn leaves employees marked inactive out of the headcount", () => {
+  const employees = [{ name: "Asha", start: "2026-01-01", term: null }, { name: "Ravi", start: "2026-01-01", term: null, inactive: true }];
+  const empByName = Object.fromEntries(employees.map((e) => [e.name, e]));
+  const b = computeBurn([A({ id: "a1", from: "2026-07-01", to: "2026-07-31" })], employees, empByName, 2026, WEEKEND, NO_HOLIDAYS);
+  const july = b.rows.find((r) => r.m === 7);
+  assert.equal(july.active, 1);
+  assert.equal(july.unalloc, 0);
+});

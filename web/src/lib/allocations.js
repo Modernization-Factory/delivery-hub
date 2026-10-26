@@ -104,7 +104,7 @@ export function computeBurn(assignments, employees, empByName, year, weekendDays
           (P.monthly[m] = P.monthly[m] || {})[ph] = (P.monthly[m][ph] || 0) + d;
         });
       });
-      const active = employees.filter((e) => isActiveDuring(e, ms, me));
+      const active = employees.filter((e) => !e.inactive && isActiveDuring(e, ms, me));
       const unalloc = active.filter((e) => !assignments.some((a) => a.name === e.name && a.from <= me && ms <= (a.to || OPEN_END))).length;
       rows.push({ m, wdim, effort, byProj, fte: wdim ? effort / wdim : 0, active: active.length, unalloc });
     });

@@ -42,7 +42,7 @@ export function computeRunway(project, empByName, assignments, leaves, leaveType
   const rows = RUNWAY_ROLES.map((role) => {
     const people = active.filter((a) => {
       const e = empByName[a.name];
-      return e && isActiveDuring(e, todayISO, todayISO) && runwayRoleOf(e.role) === role;
+      return e && !e.inactive && isActiveDuring(e, todayISO, todayISO) && runwayRoleOf(e.role) === role;
     });
     const headcount = people.length;
     // forward burn must respect concurrent-project splits, exactly like consumption does:

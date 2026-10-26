@@ -101,7 +101,7 @@ export function PerformanceView(ctx) {
       {ptab === "reports" && ctx.can("perf.reports") && (() => {
         const cfg = perfCfg;
         const sc = perfScorecard(employees, scores, week, cfg);
-        const vt = perfVendorTrend(employees, scores, cfg);
+        const vt = perfVendorTrend(ctx.allEmployees, scores, cfg);
         const names = [...new Set(scores.map((s) => s.name))].sort();
         const person = names.includes(rptName) ? rptName : names[0] || "";
         const trend = person ? perfResourceTrend(scores, person, cfg) : [];

@@ -62,8 +62,8 @@ export function AllocationsView(ctx) {
     setMsg({ tone: "ok", text: a.name + "'s " + label(a) + " assignment ended today." });
   }
 
-  const burn = useMemo(() => computeBurn(assignments, employees, empByName, year, weekendDays, holidaySet),
-    [assignments, employees, empByName, year, weekendDays, holidaySet]);
+  const burn = useMemo(() => computeBurn(assignments, ctx.allEmployees, empByName, year, weekendDays, holidaySet),
+    [assignments, ctx.allEmployees, empByName, year, weekendDays, holidaySet]);
 
   const selAssignments = sel ? assignments.filter((a) => a.name === sel).sort((a, b) => a.from.localeCompare(b.from)) : [];
   // self-healing project id: live databases use ObjectIds, so never trust a stale/hardcoded value

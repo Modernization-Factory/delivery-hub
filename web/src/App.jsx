@@ -141,7 +141,7 @@ export default function App() {
     const es = await api("/employees").catch(() => null);
     let empNameById = {};
     if (es) {
-      setEmployees0(es.map((e) => ({ id: String(e.id), name: e.name, email: e.email || "", role: e.role, company: e.company, start: e.start, term: e.term, streamLead: !!e.streamLead, viewer: !!e.viewer, isAdmin: !!e.isAdmin, custom: e.custom || {} })));
+      setEmployees0(es.map((e) => ({ id: String(e.id), name: e.name, email: e.email || "", role: e.role, company: e.company, start: e.start, term: e.term, streamLead: !!e.streamLead, viewer: !!e.viewer, isAdmin: !!e.isAdmin, inactive: !!e.inactive, custom: e.custom || {} })));
       empNameById = Object.fromEntries(es.map((e) => [String(e.id), e.name]));
       setSrvMaps((m) => ({ ...m, empIdByName: Object.fromEntries(es.map((e) => [e.name, String(e.id)])) }));
     }
@@ -190,11 +190,13 @@ export default function App() {
       remove: (c) => fire(api("/compoffs/" + c.id, { method: "DELETE" })),
     });
   };
-  const setEmployees = (next) => {
+  const setEmployees = (next0) => {
+    // pickers pass the active-only list — never let that drop inactive employees from state
+    const next = [...next0, ...employees.filter((e) => e.inactive && !next0.some((x) => x.id === e.id))];
     const prev = employees; setEmployees0(next);
     diffSync(prev, next, {
-      create: (e) => fire(api("/employees", { method: "POST", body: { name: e.name, email: e.email || null, role: e.role, company: e.company, start: e.start, term: e.term, streamLead: !!e.streamLead, viewer: !!e.viewer, custom: e.custom || {} } }).then(() => loadAll(user ? user.role : null))),
-      update: (e) => fire(api("/employees/" + e.id, { method: "PUT", body: { name: e.name, email: e.email || null, role: e.role, company: e.company, start: e.start, term: e.term, streamLead: !!e.streamLead, viewer: !!e.viewer, custom: e.custom || {} } })),
+      create: (e) => fire(api("/employees", { method: "POST", body: { name: e.name, email: e.email || null, role: e.role, company: e.company, start: e.start, term: e.term, streamLead: !!e.streamLead, viewer: !!e.viewer, inactive: !!e.inactive, custom: e.custom || {} } }).then(() => loadAll(user ? user.role : null))),
+      update: (e) => fire(api("/employees/" + e.id, { method: "PUT", body: { name: e.name, email: e.email || null, role: e.role, company: e.company, start: e.start, term: e.term, streamLead: !!e.streamLead, viewer: !!e.viewer, inactive: !!e.inactive, custom: e.custom || {} } })),
     });
   };
   // Admin grants go through their own endpoint (not PUT /employees), so update local state directly.
@@ -273,7 +275,9 @@ export default function App() {
       update: (p) => fire(api("/plans/" + p.id, { method: "PUT", body: { name: p.name, phase: p.phase, startYm: p.startYm, monthsCount: p.monthsCount, mult: p.mult, multOverrides: p.multOverrides, rows: p.rows, archived: p.archived } })),
     });
   };
-  const setTcRows = (next) => {
+  const setTcRows = (next0) => {
+    // views only see active rows — keep the hidden inactive rows in state
+    const next = [...next0, ...tcRows.filter((r) => inactiveNames.has(r.name) && !next0.some((x) => x.id === r.id))];
     const prev = tcRows; setTcRows0(next);
     const pById = Object.fromEntries(prev.map((r) => [r.id, r]));
     next.forEach((r) => {
@@ -327,6 +331,10 @@ export default function App() {
   const nextId = (p) => { setIdc(idc + 1); return p + (idc + 1); };
 
   const empByName = useMemo(() => Object.fromEntries(employees.map((e) => [e.name, e])), [employees]);
+  // employees marked inactive in the master drop out of every picker, roster and grid; their history stays in reports
+  const activeEmployees = useMemo(() => employees.filter((e) => !e.inactive), [employees]);
+  const inactiveNames = useMemo(() => new Set(employees.filter((e) => e.inactive).map((e) => e.name)), [employees]);
+  const activeTcRows = useMemo(() => tcRows.filter((r) => !inactiveNames.has(r.name)), [tcRows, inactiveNames]);
   // per timecard row, per week: does JIRA count toward the score? (driven by the project's trackJira setting)
   const jiraFlags = useMemo(() => {
     const projById = Object.fromEntries(projects.map((p) => [p.id, p]));
@@ -431,7 +439,7 @@ export default function App() {
   ];
 
   const ctx = {
-    user, employees, empByName, leaves, comps, tcRows, tcWeeks, leaveTypes, weekendDays, holidays, holidaySet,
+    user, employees: activeEmployees, allEmployees: employees, empByName, leaves, comps, tcRows: activeTcRows, tcWeeks, leaveTypes, weekendDays, holidays, holidaySet,
     setTcWeeks, assignments, setAssignments, projects, setProjects, jiraFlags,
     scores, setScores, perfCfg, setPerfCfg, can, perms, setPerms, extLinks, setExtLinks, plans, setPlans, empFields, setEmpFields, raid, setRaid, milestones, setMilestones, weeklyHealth, setWeeklyHealth, pipeline, setPipeline, uploadTimecardFile,
     todayISO, canManage, canConfigure, isDev, isAdmin,

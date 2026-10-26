@@ -63,6 +63,7 @@ const ctx = {
   todayISO: TODAY, canManage: true, canConfigure: true, isDev: false, isAdmin: true,
   nextId: (p) => p + "-new", setNav: noop, uploadTimecardFile: noop,
 };
+ctx.allEmployees = [...ctx.employees, { id: "e9", name: "Old Hand", role: "Developer", company: "MDB", start: "2025-01-01", term: null, inactive: true }];
 for (const k of ["setTcWeeks", "setAssignments", "setProjects", "setScores", "setPerfCfg", "setPerms", "setExtLinks", "setPlans", "setEmpFields", "setRaid", "setMilestones", "setWeeklyHealth", "setPipeline", "setLeaves", "setComps", "setTcRows", "setEmployees", "setLeaveTypes", "setWeekendDays", "setHolidays"]) ctx[k] = noop;
 
 // the drill-down behind a Program Health tile, rendered straight from a derived row

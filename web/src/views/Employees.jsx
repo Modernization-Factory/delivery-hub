@@ -10,16 +10,17 @@ import { usePaged } from "../ui/usePaged.jsx";
 // EMPLOYEES (Lead view · PM/Admin edit)
 // ============================================================
 export function EmployeesView(ctx) {
-  const { employees, setEmployees, nextId, todayISO, empFields, setEmpFields } = ctx;
+  const { allEmployees: employees, setEmployees, nextId, todayISO, empFields, setEmpFields } = ctx;
   const canConfigure = ctx.can("employees.edit");
   const isAdmin = ctx.user.role === "Admin";
   const [q, setQ] = useState("");
   const [activeOnly, setActiveOnly] = useState(false);
   const [edit, setEdit] = useState(null); // employee object or "new"
   const [msg, setMsg] = useState(null);
-  const activeCount = employees.filter((e) => isActiveDuring(e, todayISO, todayISO)).length;
+  const isActive = (e) => !e.inactive && isActiveDuring(e, todayISO, todayISO);
+  const activeCount = employees.filter(isActive).length;
   const rows = employees
-    .filter((e) => e.name.toLowerCase().includes(q.toLowerCase()) && (!activeOnly || isActiveDuring(e, todayISO, todayISO)))
+    .filter((e) => e.name.toLowerCase().includes(q.toLowerCase()) && (!activeOnly || isActive(e)))
     .sort((a, b) => a.name.localeCompare(b.name));
   const { rows: pageRows, pager } = usePaged(rows, 25);
   function save(form) {
@@ -31,6 +32,7 @@ export function EmployeesView(ctx) {
     if (form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) return setMsg({ tone: "error", text: "That doesn't look like a valid email address." });
     const emailClash = form.email && employees.find((e) => e.email && e.email.toLowerCase() === form.email.trim().toLowerCase() && e.id !== form.id);
     if (emailClash) return setMsg({ tone: "error", text: "That email is already on " + emailClash.name + " — emails are the login identity and must be unique." });
+    if (form.inactive && form.name === ctx.user.name) return setMsg({ tone: "error", text: "You can't mark yourself inactive." });
     if (form.email) form = { ...form, email: form.email.trim().toLowerCase() };
     if (form.id) setEmployees(employees.map((e) => (e.id === form.id ? form : e)));
     else setEmployees([...employees, { ...form, id: nextId("e") }]);
@@ -47,7 +49,7 @@ export function EmployeesView(ctx) {
             Active only
           </label>
           <input className={inputCls + " w-56"} placeholder="Search…" value={q} onChange={(e) => setQ(e.target.value)} />
-          {canConfigure && <Btn onClick={() => setEdit({ id: null, name: "", email: "", role: "Developer", company: "MDB", start: "", term: null, streamLead: false, viewer: false, custom: {} })}>Add employee</Btn>}
+          {canConfigure && <Btn onClick={() => setEdit({ id: null, name: "", email: "", role: "Developer", company: "MDB", start: "", term: null, streamLead: false, viewer: false, inactive: false, custom: {} })}>Add employee</Btn>}
         </div>
       </div>
       {!canConfigure && <Notice tone="warn">View only — the employee master is maintained by the Project Manager (same rule as the source tracker).</Notice>}
@@ -71,7 +73,7 @@ export function EmployeesView(ctx) {
                 <tr key={e.id}>
                   <td className="py-1.5 pr-4 font-medium text-slate-800">{e.name}</td>
                   <td className="py-1.5 pr-4 text-slate-500">{e.email || <span className="text-amber-600" title="No email — this person can't log in to the live app">not set</span>}</td>
-                  <td className="py-1.5 pr-4"><Pill tone={e.role === "Project Manager" ? "bg-purple-100 text-purple-800" : e.role === "Lead Developer" ? "bg-sky-100 text-sky-800" : "bg-slate-100 text-slate-600"}>{e.role}</Pill>{e.streamLead && <Pill tone="ml-1 bg-indigo-100 text-indigo-800">Stream Lead</Pill>}{e.viewer && <Pill tone="ml-1 bg-teal-100 text-teal-800">Viewer</Pill>}</td>
+                  <td className="py-1.5 pr-4"><Pill tone={e.role === "Project Manager" ? "bg-purple-100 text-purple-800" : e.role === "Lead Developer" ? "bg-sky-100 text-sky-800" : "bg-slate-100 text-slate-600"}>{e.role}</Pill>{e.streamLead && <Pill tone="ml-1 bg-indigo-100 text-indigo-800">Stream Lead</Pill>}{e.viewer && <Pill tone="ml-1 bg-teal-100 text-teal-800">Viewer</Pill>}{e.inactive && <Pill tone="ml-1 bg-rose-100 text-rose-800">Inactive</Pill>}</td>
                   <td className="py-1.5 pr-4 text-slate-600">{e.company}</td>
                   <td className="py-1.5 pr-4 text-slate-500">{fmt(e.start)}</td>
                   <td className="py-1.5 pr-4 text-slate-500">
@@ -123,6 +125,10 @@ export function EmpForm({ initial, empFields = [], onSave, onCancel }) {
           Stream Lead — grants Lead access (leave management, timecards, allocations, performance scoring)
         </label>
       )}
+      <label className="mt-2 flex cursor-pointer items-center gap-2 text-sm text-slate-700">
+        <input type="checkbox" className="h-4 w-4 accent-emerald-700" checked={!f.inactive} onChange={(e) => setF({ ...f, inactive: !e.target.checked })} />
+        Active — unticking hides this person from assignments, timecards, leave and every other module (history is kept) and blocks their login
+      </label>
       <label className="mt-2 flex cursor-pointer items-center gap-2 text-sm text-slate-700">
         <input type="checkbox" className="h-4 w-4 accent-teal-600" checked={!!f.viewer} onChange={(e) => setF({ ...f, viewer: e.target.checked })} />
         Viewer — read-only access to everything; can't add or update until granted in the permission matrix (overrides other access)

@@ -162,6 +162,7 @@ async function resolveUser(req, res, next) {
     const today = R.toISO(new Date());
     const e = { start: employee.startDate ? R.toISO(employee.startDate) : null, term: employee.endDate ? R.toISO(employee.endDate) : null };
     if (!R.isActiveDuring(e, today, today)) return res.status(403).json({ error: "inactive", detail: "This account's end date has passed." });
+    if (employee.inactive) return res.status(403).json({ error: "inactive", detail: "This account has been marked inactive." });
     const appRole = employee.isAdmin ? "Admin" : R.appRoleForEmp({ role: employee.role, streamLead: employee.streamLead, viewer: employee.viewer });
     const permsDoc = await col("permissions").findOne({ _id: "global" });
     // mergePerms backfills roles/capabilities added after the stored doc was written (e.g. Viewer, plans.*)
