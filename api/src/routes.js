@@ -54,7 +54,7 @@ function leaveCtx(s) {
     holidaySet: new Set((s.holidays || []).map(iso)),
   };
 }
-const empShape = (e) => ({ id: e._id, name: e.name, email: e.email, role: e.role, streamLead: !!e.streamLead, viewer: !!e.viewer, isAdmin: !!e.isAdmin, company: e.company, start: iso(e.startDate), term: iso(e.endDate), custom: e.custom || {} });
+const empShape = (e) => ({ id: e._id, name: e.name, email: e.email, role: e.role, streamLead: !!e.streamLead, viewer: !!e.viewer, isAdmin: !!e.isAdmin, inactive: !!e.inactive, company: e.company, start: iso(e.startDate), term: iso(e.endDate), custom: e.custom || {} });
 
 // ---------- me ----------
 // `email` is the identity the request was authenticated as (the Okta claim on Kanopy),
@@ -67,25 +67,26 @@ router.get("/me", async (req, res) => {
 // ---------- employees ----------
 // Without employees.view the caller still gets a name directory (no email / custom fields) —
 // every role needs it to resolve names on their own leave, timecard and the team calendar.
-const dirShape = (e) => ({ id: e._id, name: e.name, role: e.role, company: e.company, start: iso(e.startDate), term: iso(e.endDate) });
+const dirShape = (e) => ({ id: e._id, name: e.name, role: e.role, inactive: !!e.inactive, company: e.company, start: iso(e.startDate), term: iso(e.endDate) });
 router.get("/employees", async (req, res) => {
   const all = await col("employees").find().sort({ name: 1 }).toArray();
   res.json(all.map(req.can("employees.view") ? empShape : dirShape));
 });
 router.post("/employees", requireCap("employees.edit"), audit("employee.create"), async (req, res) => {
-  const { name, email, role, company, start, term, streamLead, viewer, custom } = req.body;
+  const { name, email, role, company, start, term, streamLead, viewer, inactive, custom } = req.body;
   if (!name || !name.trim()) return res.status(422).json({ error: "name_required" });
   if (await col("employees").findOne({ name: name.trim() })) return res.status(409).json({ error: "duplicate_name" });
-  const doc = { name: name.trim(), email: email ? String(email).toLowerCase() : null, role: role || "Developer", streamLead: !!streamLead, viewer: !!viewer, custom: custom || {}, isAdmin: false, company: company || "MDB", startDate: day(start), endDate: day(term), createdAt: new Date(), updatedAt: new Date(), updatedBy: req.user.employee.name };
+  const doc = { name: name.trim(), email: email ? String(email).toLowerCase() : null, role: role || "Developer", streamLead: !!streamLead, viewer: !!viewer, inactive: !!inactive, custom: custom || {}, isAdmin: false, company: company || "MDB", startDate: day(start), endDate: day(term), createdAt: new Date(), updatedAt: new Date(), updatedBy: req.user.employee.name };
   const r = await col("employees").insertOne(doc);
   res.status(201).json(empShape({ ...doc, _id: r.insertedId }));
 });
 router.put("/employees/:id", requireCap("employees.edit"), audit("employee.update"), async (req, res) => {
-  const { name, email, role, company, start, term, streamLead, viewer, custom } = req.body;
+  const { name, email, role, company, start, term, streamLead, viewer, inactive, custom } = req.body;
   if (term && start && term < start) return res.status(422).json({ error: "end_before_start" });
+  if (inactive && String(req.params.id) === String(req.user.employee._id)) return res.status(422).json({ error: "cannot_deactivate_self", detail: "You can't mark yourself inactive." });
   await col("employees").updateOne(
     { _id: new ObjectId(req.params.id) },
-    { $set: { name, email: email ? String(email).toLowerCase() : null, role, company, streamLead: !!streamLead, viewer: !!viewer, custom: custom || {}, startDate: day(start), endDate: day(term), updatedAt: new Date(), updatedBy: req.user.employee.name } }
+    { $set: { name, email: email ? String(email).toLowerCase() : null, role, company, streamLead: !!streamLead, viewer: !!viewer, inactive: !!inactive, custom: custom || {}, startDate: day(start), endDate: day(term), updatedAt: new Date(), updatedBy: req.user.employee.name } }
   );
   res.json({ ok: true });
 });
@@ -105,6 +106,7 @@ router.post("/leaves", audit("leave.create"), async (req, res) => {
   if (!self && !req.can("leave.forAnyone")) return res.status(403).json({ error: "forbidden" });
   const target = self ? req.user.employee : await col("employees").findOne({ _id: new ObjectId(employeeId) });
   if (!target) return res.status(404).json({ error: "employee_not_found" });
+  if (target.inactive) return res.status(422).json({ error: "employee_inactive", detail: target.name + " is marked inactive." });
   if (!start || !end || end < start) return res.status(422).json({ error: "invalid_dates" });
   const s = await settings();
   const { leaveTypes, weekendDays, holidaySet } = leaveCtx(s);
@@ -138,6 +140,7 @@ router.get("/compoffs", async (req, res) => {
 });
 router.post("/compoffs", requireCap("leave.compoff"), audit("compoff.create"), async (req, res) => {
   const { employeeId, dateWorked, days, reason } = req.body;
+  if (await col("employees").findOne({ _id: new ObjectId(employeeId), inactive: true })) return res.status(422).json({ error: "employee_inactive" });
   const s = await settings();
   const { weekendDays, holidaySet } = leaveCtx(s);
   if (!R.compOffDateValid(dateWorked, weekendDays, holidaySet)) return res.status(422).json({ error: "not_weekend_or_holiday" });
@@ -172,7 +175,8 @@ router.post("/timecards/weeks", requireCap("timecard.editAll"), audit("timecard.
   const base = last[0] ? R.toISO(last[0].week) : R.toISO(new Date());
   const d = R.parseISO(base);
   const next = R.toISO(new Date(d.getFullYear(), d.getMonth(), d.getDate() + 7));
-  const people = await col("timecards").distinct("employeeId");
+  const inactiveIds = await col("employees").distinct("_id", { inactive: true });
+  const people = await col("timecards").distinct("employeeId", { employeeId: { $nin: inactiveIds } });
   if (people.length) {
     await col("timecards").insertMany(people.map((employeeId) => ({ employeeId, week: day(next), sf: null, jira: null, updatedAt: new Date(), updatedBy: req.user.employee.name, source: "manual" })), { ordered: false });
   }
@@ -185,8 +189,8 @@ router.post("/timecards/import", requireCap("timecard.editAll"), upload.single("
   const parsed = R.parseTimecardGrid(grid);
   if (!parsed.weeks.length || !parsed.rows.length) return res.status(422).json({ error: "unrecognised_template", sheet: wsName });
   const employees = await col("employees").find().toArray();
-  const idByName = Object.fromEntries(employees.map((e) => [e.name, e._id]));
-  const unknown = parsed.rows.filter((r) => !idByName[r.name]).map((r) => r.name);
+  const idByName = Object.fromEntries(employees.filter((e) => !e.inactive).map((e) => [e.name, e._id]));
+  const unknown = parsed.rows.filter((r) => !idByName[r.name] && !employees.some((e) => e.name === r.name)).map((r) => r.name);
   const ops = [];
   parsed.rows.forEach((r) => {
     const employeeId = idByName[r.name];
@@ -245,6 +249,7 @@ router.post("/assignments", requireCap("alloc.edit"), audit("assignment.create")
   const { employeeId, projectId, phase, stream, from, to } = req.body;
   const emp = await col("employees").findOne({ _id: new ObjectId(employeeId) });
   if (!emp) return res.status(404).json({ error: "employee_not_found" });
+  if (emp.inactive) return res.status(422).json({ error: "employee_inactive", detail: emp.name + " is marked inactive." });
   if (!from) return res.status(422).json({ error: "from_required" });
   if (to && to < from) return res.status(422).json({ error: "invalid_range" });
   if (emp.endDate && from > R.toISO(emp.endDate)) return res.status(422).json({ error: "starts_after_end_date" });
@@ -280,7 +285,7 @@ router.get("/runway", requireCap("runway.view"), async (_req, res) => {
   const s = await settings();
   const { leaveTypes, weekendDays, holidaySet } = leaveCtx(s);
   const employees = await col("employees").find().toArray();
-  const empByName = Object.fromEntries(employees.map((e) => [e.name, { name: e.name, role: e.role, start: iso(e.startDate), term: iso(e.endDate) }]));
+  const empByName = Object.fromEntries(employees.map((e) => [e.name, { name: e.name, role: e.role, inactive: !!e.inactive, start: iso(e.startDate), term: iso(e.endDate) }]));
   const nameById = Object.fromEntries(employees.map((e) => [String(e._id), e.name]));
   const assignments = (await col("assignments").find().toArray()).map((a) => ({ id: String(a._id), name: nameById[String(a.employeeId)], projectId: String(a.projectId), from: iso(a.from), to: iso(a.to), weeklyHours: a.weeklyHours || 40 }));
   const leaves = (await col("leaves").find().toArray()).map((l) => ({ name: nameById[String(l.employeeId)], start: iso(l.start), end: iso(l.end), type: l.type }));
@@ -534,6 +539,7 @@ router.put("/admin/employees/:id/admin", requireAdmin, audit("employee.setAdmin"
   const id = oid(req.params.id);
   const isAdmin = req.body && req.body.isAdmin;
   if (typeof isAdmin !== "boolean") return res.status(422).json({ error: "isAdmin_must_be_boolean" });
+  if (isAdmin && (await col("employees").findOne({ _id: id, inactive: true }))) return res.status(422).json({ error: "employee_inactive", detail: "Inactive employees can't be made Admin." });
   if (!isAdmin && id.equals(req.user.employee._id)) return res.status(422).json({ error: "cannot_revoke_self", detail: "You can't remove your own Admin access — ask another Admin." });
   const r = await col("employees").updateOne({ _id: id }, { $set: { isAdmin, updatedAt: new Date(), updatedBy: req.user.employee.name } });
   if (!r.matchedCount) return res.status(404).json({ error: "employee_not_found" });

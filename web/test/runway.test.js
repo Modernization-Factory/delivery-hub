@@ -116,3 +116,10 @@ test("runwaySummary handles no funding and no staffed roles", () => {
   assert.equal(s.rag, null);
   assert.equal(s.minWeeks, null);
 });
+
+test("computeRunway drops employees marked inactive from the forward headcount", () => {
+  const project = { id: "p1", funding: { start: "2026-07-13", hours: { PM: 0, LD: 0, SD: 0, Dev: 200 }, overrides: {} } };
+  const assignments = [{ id: "a1", name: "Asha", projectId: "p1", from: "2026-07-01", to: null, weeklyHours: 40 }];
+  const rw = computeRunway(project, { Asha: { ...dev, inactive: true } }, assignments, [], LEAVE_TYPES, WEEKEND, NO_HOLIDAYS, TODAY);
+  assert.equal(rw.rows.find((r) => r.role === "Dev").headcount, 0);
+});

@@ -25,8 +25,8 @@ export function ProjectsView(ctx) {
   const [sortBy, setSortBy] = useState("name");
   const r1 = (x) => Math.round(x * 10) / 10;
   const marginsVisible = ctx.user.role === "Project Manager" || ctx.user.role === "Admin";
-  const burn = useMemo(() => computeBurn(assignments, employees, empByName, year, weekendDays, holidaySet),
-    [assignments, employees, empByName, year, weekendDays, holidaySet]);
+  const burn = useMemo(() => computeBurn(assignments, ctx.allEmployees, empByName, year, weekendDays, holidaySet),
+    [assignments, ctx.allEmployees, empByName, year, weekendDays, holidaySet]);
 
   // one derivation per project, shared by the list and the detail view
   const rows = projects.map((p) => {
