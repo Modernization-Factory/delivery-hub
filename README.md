@@ -231,6 +231,10 @@ collection — the same registry the frontend Admin panel edits.
 
 ## 5. Deployment (Kanopy)
 
+Every push to `main` triggers Drone (`.drone.yml`): it builds the image, tags it
+`git-<short sha>`, and Helm-releases it to staging at
+https://delivery-hub.amp-delivery.staging.corp.mongodb.com.
+
 ### 5.1 Build the image
 
 One image holds both halves: the root `Dockerfile` builds `web/` in a first stage and
