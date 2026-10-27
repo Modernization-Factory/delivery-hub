@@ -86,10 +86,11 @@ export default function App() {
       const eid2 = String(d.employeeId);
       const name = empNameById[eid2];
       if (!name) return;
-      const r = (rowsByEmp[eid2] = rowsByEmp[eid2] || { id: eid2, name, release: d.release || "", remarks: d.remarks || "", weeks: weeks.map(() => ["", ""]) });
+      const r = (rowsByEmp[eid2] = rowsByEmp[eid2] || { id: eid2, name, release: d.release || "", remarks: d.remarks || "", weeks: weeks.map(() => ["", ""]), notes: {} });
       if (d.release) r.release = d.release;
       if (d.remarks) r.remarks = d.remarks;
       r.weeks[wIdx[dstr(d.week)]] = [d.sf || "", d.jira || ""];
+      if (d.flag) r.notes[wIdx[dstr(d.week)]] = { comment: d.flag.comment || "", by: d.flag.by || "", at: dstr(d.flag.at) };
       (docIds[eid2] = docIds[eid2] || {})[dstr(d.week)] = String(d._id);
     });
     setTcWeeks0(weeks);
@@ -307,6 +308,19 @@ export default function App() {
   const setEmpFields = (next) => { setEmpFields0(next); fire(api("/settings", { method: "PUT", body: { empFields: next } })); };
   const setPerfCfg = (next) => { setPerfCfg0(next); fire(api("/perf/config", { method: "PUT", body: next })); };
   const setPerms = (next) => { setPerms0(next); fire(api("/admin/permissions", { method: "PUT", body: { perms: next } })); };
+  // flag / unflag one person-week as an outlier, with an optional comment
+  async function setTcFlag(rowId, weekIdx, flag) {
+    const docId = srvMaps.tcDocIds[rowId] && srvMaps.tcDocIds[rowId][tcWeeks[weekIdx]];
+    if (!docId) throw new Error("That week has no timecard record for this person yet.");
+    await api("/timecards/" + docId + "/flag", { method: "PUT", body: { flagged: !!flag, comment: flag ? flag.comment : "" } });
+    setTcRows0((rows) => rows.map((r) => {
+      if (r.id !== rowId) return r;
+      const notes = { ...(r.notes || {}) };
+      if (flag) notes[weekIdx] = { comment: flag.comment, by: user.name, at: todayISO };
+      else delete notes[weekIdx];
+      return { ...r, notes };
+    }));
+  }
   async function uploadTimecardFile(file) {
     const fd = new FormData();
     fd.append("file", file);
@@ -411,7 +425,7 @@ export default function App() {
 
   const can = (cap) => canDo(perms, user.role, cap);
   // roles that can't see the whole timecard grid get their own row only ("My Timecard")
-  const isDev = !can("timecard.editAll") && !can("timecard.insights");
+  const isDev = !can("timecard.editAll") && !can("timecard.insights") && !can("timecard.flag");
   const isLead = user.role === "Lead";
   const isPM = user.role === "Project Manager";
   const isAdmin = user.role === "Admin";
@@ -441,7 +455,7 @@ export default function App() {
   const ctx = {
     user, employees: activeEmployees, allEmployees: employees, empByName, leaves, comps, tcRows: activeTcRows, tcWeeks, leaveTypes, weekendDays, holidays, holidaySet,
     setTcWeeks, assignments, setAssignments, projects, setProjects, jiraFlags,
-    scores, setScores, perfCfg, setPerfCfg, can, perms, setPerms, extLinks, setExtLinks, plans, setPlans, empFields, setEmpFields, raid, setRaid, milestones, setMilestones, weeklyHealth, setWeeklyHealth, pipeline, setPipeline, uploadTimecardFile,
+    scores, setScores, perfCfg, setPerfCfg, can, perms, setPerms, extLinks, setExtLinks, plans, setPlans, empFields, setEmpFields, raid, setRaid, milestones, setMilestones, weeklyHealth, setWeeklyHealth, pipeline, setPipeline, uploadTimecardFile, setTcFlag,
     todayISO, canManage, canConfigure, isDev, isAdmin,
     setLeaves, setComps, setTcRows, setEmployees, setLeaveTypes, setWeekendDays, setHolidays, nextId, setNav, setEmployeeAdmin,
   };
