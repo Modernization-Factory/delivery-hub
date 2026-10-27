@@ -159,15 +159,27 @@ router.delete("/compoffs/:id", requireCap("leave.compoff"), audit("compoff.delet
 // ---------- timecards ----------
 router.get("/timecards", async (req, res) => {
   const mine = req.query.mine === "1";
-  if (!mine && !req.can("timecard.insights") && !req.can("timecard.editAll")) return res.status(403).json({ error: "forbidden" });
+  if (!mine && !req.can("timecard.insights") && !req.can("timecard.editAll") && !req.can("timecard.flag")) return res.status(403).json({ error: "forbidden" });
   const q = mine ? { employeeId: req.user.employee._id } : {};
-  res.json(await col("timecards").find(q).sort({ week: 1 }).toArray());
+  // outlier flags are a manager's note — only roles that see the whole grid get them
+  const proj = req.can("timecard.editAll") || req.can("timecard.insights") || req.can("timecard.flag") ? {} : { projection: { flag: 0 } };
+  res.json(await col("timecards").find(q, proj).sort({ week: 1 }).toArray());
 });
 router.put("/timecards/:id", requireCap("timecard.editAll"), audit("timecard.update"), async (req, res) => {
   const { sf, jira } = req.body;
   const valid = (v) => v === null || v === "" || R.TC_STATUSES.includes(v);
   if (!valid(sf) || !valid(jira)) return res.status(422).json({ error: "invalid_status" });
   await col("timecards").updateOne({ _id: new ObjectId(req.params.id) }, { $set: { sf: sf || null, jira: jira || null, updatedAt: new Date(), updatedBy: req.user.employee.name, source: "manual" } });
+  res.json({ ok: true });
+});
+// outlier flag + comment on one person-week; kept separate from sf/jira so a sheet re-import never clears it
+router.put("/timecards/:id/flag", requireCap("timecard.flag"), audit("timecard.flag"), async (req, res) => {
+  const flagged = !!(req.body && req.body.flagged);
+  const comment = String((req.body && req.body.comment) || "").trim().slice(0, 500);
+  const r = await col("timecards").updateOne({ _id: new ObjectId(req.params.id) }, flagged
+    ? { $set: { flag: { comment, by: req.user.employee.name, at: new Date() } } }
+    : { $unset: { flag: "" } });
+  if (!r.matchedCount) return res.status(404).json({ error: "not_found" });
   res.json({ ok: true });
 });
 router.post("/timecards/weeks", requireCap("timecard.editAll"), audit("timecard.addWeek"), async (req, res) => {

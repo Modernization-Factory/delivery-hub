@@ -40,7 +40,7 @@ const ctx = {
   employees, empByName: Object.fromEntries(employees.map((e) => [e.name, e])),
   leaves: [{ id: "l0", name: "Asha", start: "2026-07-20", end: "2026-07-22", type: "Vacation" }],
   comps: [{ id: "c0", name: "Asha", date: "2026-07-18", days: 1, reason: "release" }],
-  tcRows: [{ id: "e0", name: "Asha", release: "R1", remarks: "", weeks: [["Proactive", "Chased"], ["Proactive", "Proactive"]] }],
+  tcRows: [{ id: "e0", name: "Asha", release: "R1", remarks: "", weeks: [["Proactive", "Chased"], ["Proactive", "Proactive"]], notes: { 0: { comment: "chased for JIRA", by: "Mia", at: "2026-07-11" } } }],
   tcWeeks: ["2026-07-11", "2026-07-18"],
   leaveTypes: [{ name: "Vacation", value: 1 }, { name: "Sick", value: 1 }, { name: "Unpaid", value: 1 }, { name: "Half Day", value: 0.5 }, { name: "Comp-Off", value: 1 }],
   weekendDays: [0, 6], holidays: ["2026-07-17"], holidaySet: new Set(["2026-07-17"]),
@@ -64,7 +64,7 @@ const ctx = {
   nextId: (p) => p + "-new", setNav: noop, uploadTimecardFile: noop,
 };
 ctx.allEmployees = [...ctx.employees, { id: "e9", name: "Old Hand", role: "Developer", company: "MDB", start: "2025-01-01", term: null, inactive: true }];
-for (const k of ["setTcWeeks", "setAssignments", "setProjects", "setScores", "setPerfCfg", "setPerms", "setExtLinks", "setPlans", "setEmpFields", "setRaid", "setMilestones", "setWeeklyHealth", "setPipeline", "setLeaves", "setComps", "setTcRows", "setEmployees", "setLeaveTypes", "setWeekendDays", "setHolidays"]) ctx[k] = noop;
+for (const k of ["setTcWeeks", "setAssignments", "setProjects", "setScores", "setPerfCfg", "setPerms", "setExtLinks", "setPlans", "setEmpFields", "setRaid", "setMilestones", "setWeeklyHealth", "setPipeline", "setLeaves", "setComps", "setTcRows", "setTcFlag", "setEmployees", "setLeaveTypes", "setWeekendDays", "setHolidays"]) ctx[k] = noop;
 
 // the drill-down behind a Program Health tile, rendered straight from a derived row
 const healthEntries = ctx.weeklyHealth;

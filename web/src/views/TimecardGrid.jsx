@@ -1,8 +1,8 @@
 import { useState } from "react";
 import * as XLSX from "xlsx";
 import { fmt, fmtShort, parseISO, toISO } from "../lib/dates.js";
-import { TC_COLORS, TC_STATUSES, parseTimecardGrid, tcStatsFlex } from "../lib/timecard.js";
-import { Btn, Card, Notice, Pill, inputCls } from "../ui/atoms.jsx";
+import { TC_COLORS, TC_PROBLEM, TC_STATUSES, parseTimecardGrid, tcStatsFlex, weekOutliers } from "../lib/timecard.js";
+import { Btn, Card, Field, Notice, Pill, inputCls } from "../ui/atoms.jsx";
 import { BRAND_FONT } from "../ui/brand.jsx";
 import { usePaged } from "../ui/usePaged.jsx";
 
@@ -104,6 +104,23 @@ export function TimecardGrid(ctx) {
     ? tcRows.filter((r) => r.name === user.name)
     : tcRows.filter((r) => r.name.toLowerCase().includes(q.toLowerCase()) && (co === "All" || SEEDCO(r.name) === co));
   const { rows: gridRows, pager: gridPager } = usePaged(rows, 25);
+  const canFlag = ctx.can("timecard.flag") && !!ctx.setTcFlag;
+  const [flagEdit, setFlagEdit] = useState(null); // { rowId, name, weekIdx, comment, existing }
+  const [flagBusy, setFlagBusy] = useState(false);
+  function openFlag(r, wi) {
+    const n = (r.notes || {})[wi];
+    setFlagEdit({ rowId: r.id, name: r.name, weekIdx: wi, comment: n ? n.comment : "", existing: !!n });
+  }
+  async function saveFlag(flagged) {
+    setFlagBusy(true);
+    try {
+      await ctx.setTcFlag(flagEdit.rowId, flagEdit.weekIdx, flagged ? { comment: flagEdit.comment.trim() } : null);
+      setImpMsg({ tone: "ok", text: (flagged ? "Flagged " : "Removed the flag on ") + flagEdit.name + " · week ending " + fmtShort(tcWeeks[flagEdit.weekIdx]) + "." });
+      setFlagEdit(null);
+    } catch (e) {
+      setImpMsg({ tone: "error", text: "Couldn't save the flag: " + e.message });
+    } finally { setFlagBusy(false); }
+  }
   function setCell(rowId, weekIdx, slot, value) {
     setTcRows(tcRows.map((r) => {
       if (r.id !== rowId) return r;
@@ -147,6 +164,20 @@ export function TimecardGrid(ctx) {
           <div className="mt-3 flex gap-2">
             <Btn onClick={applyImport}>Import & replace grid</Btn>
             <Btn kind="ghost" onClick={() => setPending(null)}>Cancel</Btn>
+          </div>
+        </Card>
+      )}
+      {!isDev && <OutlierPanel rows={tcRows} weeks={tcWeeks} jiraFlags={jiraFlags} canFlag={canFlag} onOpen={(r, wi) => openFlag(r, wi)} />}
+      {flagEdit && (
+        <Card title={"Outlier flag — " + flagEdit.name + " · week ending " + fmtShort(tcWeeks[flagEdit.weekIdx])}>
+          <Field label="Comment (why this week is an outlier)">
+            <textarea className={inputCls + " h-20"} maxLength={500} value={flagEdit.comment} autoFocus
+              onChange={(e) => setFlagEdit({ ...flagEdit, comment: e.target.value })} placeholder="e.g. chased twice for SF; JIRA updated on Tuesday" />
+          </Field>
+          <div className="mt-3 flex gap-2">
+            <Btn small disabled={flagBusy} onClick={() => saveFlag(true)}>{flagEdit.existing ? "Save flag" : "Flag as outlier"}</Btn>
+            {flagEdit.existing && <Btn small kind="danger" disabled={flagBusy} onClick={() => saveFlag(false)}>Remove flag</Btn>}
+            <Btn small kind="ghost" disabled={flagBusy} onClick={() => setFlagEdit(null)}>Cancel</Btn>
           </div>
         </Card>
       )}
@@ -196,25 +227,34 @@ export function TimecardGrid(ctx) {
                     {visWeeks.map(({ i: wi }) => {
                       const w = r.weeks[wi] || ["", ""];
                       const jiraOn = !jiraFlags[r.id] || jiraFlags[r.id][wi] !== false;
+                      const note = !isDev && (r.notes || {})[wi];
+                      // a flagged person-week is outlined in amber across its SF + JIRA cells
+                      const hl = note ? (slot) => " bg-amber-50 border-y-2 border-amber-400" + (slot === 0 ? " border-l-2" : " border-r-2") : () => "";
+                      const flagBtn = (canFlag || note) && (
+                        <button type="button" disabled={!canFlag} onClick={() => openFlag(r, wi)}
+                          title={note ? "Outlier: " + (note.comment || "(no comment)") + " — " + note.by + (canFlag ? " · click to edit" : "") : "Flag this week as an outlier"}
+                          className={"ml-0.5 align-middle text-xs " + (note ? "text-amber-600" : "text-slate-300 opacity-0 group-hover:opacity-100 hover:text-amber-600")}>⚑</button>
+                      );
                       return [0, 1].map((slot) => slot === 1 && !jiraOn ? (
-                        <td key={r.id + wi + slot} className="border-b border-slate-100 p-0.5">
+                        <td key={r.id + wi + slot} className={"border-b border-slate-100 p-0.5" + hl(slot)}>
                           <div style={{ width: 86 }} title="JIRA not tracked for this resource's project this week — excluded from the proactiveness score" className="rounded bg-slate-50 px-1 py-1 text-center text-xs font-medium text-slate-300">n/t</div>
                         </td>
                       ) : (
-                        <td key={r.id + wi + slot} className={"border-b border-slate-100 p-0.5 " + (slot === 0 ? "border-l" : "")}>
+                        <td key={r.id + wi + slot} className={"whitespace-nowrap border-b border-slate-100 p-0.5 " + (slot === 0 ? "border-l" : "") + hl(slot)}>
                           {canManage ? (
                             <select
                               value={w[slot] || ""}
                               onChange={(e) => setCell(r.id, wi, slot, e.target.value)}
                               style={{ width: 86 }}
-                              className={"cursor-pointer appearance-none rounded px-1 py-1 text-center text-xs font-medium focus:outline-none focus:ring-1 focus:ring-emerald-400 " + TC_COLORS[w[slot] || ""]}
+                              className={"inline-block cursor-pointer appearance-none rounded px-1 py-1 text-center text-xs font-medium focus:outline-none focus:ring-1 focus:ring-emerald-400 " + TC_COLORS[w[slot] || ""]}
                             >
                               <option value="">—</option>
                               {TC_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
                             </select>
                           ) : (
-                            <div style={{ width: 86 }} className={"rounded px-1 py-1 text-center text-xs font-medium " + TC_COLORS[w[slot] || ""]}>{w[slot] || "—"}</div>
+                            <div style={{ width: 86 }} className={"inline-block rounded px-1 py-1 text-center text-xs font-medium " + TC_COLORS[w[slot] || ""]}>{w[slot] || "—"}</div>
                           )}
+                          {slot === 0 && flagBtn}
                         </td>
                       ));
                     })}
@@ -232,9 +272,83 @@ export function TimecardGrid(ctx) {
         {gridPager}
         <div className="mt-3 flex flex-wrap gap-2 text-xs">
           {TC_STATUSES.map((s) => <Pill key={s} tone={TC_COLORS[s]}>{s}</Pill>)}
-          {canManage && <span className="self-center text-slate-400">Click any cell to update. "n/t" = JIRA not tracked for that project (configured per project in the Projects menu) — excluded from the score.</span>}
+          {canManage && <span className="self-center text-slate-400">Click any cell to update · hover a week and click ⚑ to flag it as an outlier with a comment. "n/t" = JIRA not tracked for that project (configured per project in the Projects menu) — excluded from the score.</span>}
         </div>
       </Card>
     </div>
+  );
+}
+
+// Outliers by week — the source sheet's footer tally (status counts per week, SF and JIRA
+// separately, Completed), with problem statuses highlighted, plus flagged person-weeks.
+function OutlierPanel({ rows, weeks, jiraFlags, canFlag, onOpen }) {
+  const [n, setN] = useState(8); // most recent weeks shown
+  const [showAll, setShowAll] = useState(false);
+  const recent = weeks.map((w, i) => ({ w, i })).slice(-n).reverse();
+  const tallies = recent.map(({ w, i }) => ({ w, i, t: weekOutliers(rows, i, jiraFlags) }));
+  const flagged = [];
+  rows.forEach((r) => Object.entries(r.notes || {}).forEach(([wi, note]) => flagged.push({ r, wi: Number(wi), note })));
+  flagged.sort((a, b) => b.wi - a.wi || a.r.name.localeCompare(b.r.name));
+  const shownFlags = showAll ? flagged : flagged.slice(0, 10);
+  const cols = [...TC_STATUSES.filter((s) => s !== "N/A"), "N/A", "Completed"];
+  const pair = (t, s) => (
+    <span className="tabular-nums">{t.sf[s]}<span className="text-slate-300"> / </span>{t.jira[s]}</span>
+  );
+  return (
+    <Card title="Outliers by week" right={
+      <select className={inputCls + " w-36"} value={n} onChange={(e) => setN(Number(e.target.value))}>
+        {[4, 8, 12, weeks.length].filter((x, k, a) => x <= weeks.length && a.indexOf(x) === k).map((x) => <option key={x} value={x}>{x === weeks.length ? "All weeks" : "Last " + x + " weeks"}</option>)}
+      </select>
+    }>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-slate-200 text-left uppercase tracking-wide text-slate-500">
+              <th className="py-2 pr-3">Week ending</th>
+              {cols.map((s) => <th key={s} className={"py-2 pr-3 text-center " + (TC_PROBLEM.includes(s) ? "text-red-600" : "")}>{s}</th>)}
+              <th className="py-2 pr-3 text-center">People with an issue</th>
+              <th className="py-2 pr-3 text-center text-amber-600">⚑ Flagged</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {tallies.map(({ w, t }) => (
+              <tr key={w}>
+                <td className="py-1.5 pr-3 font-medium text-slate-700">{fmtShort(w)}</td>
+                {cols.map((s) => {
+                  const bad = TC_PROBLEM.includes(s) && t.sf[s] + t.jira[s] > 0;
+                  return <td key={s} className={"py-1.5 pr-3 text-center " + (bad ? "bg-red-50 font-semibold text-red-700" : "text-slate-600")}>{pair(t, s)}</td>;
+                })}
+                <td className={"py-1.5 pr-3 text-center " + (t.problemPeople ? "font-semibold text-red-700" : "text-slate-400")}>{t.problemPeople}</td>
+                <td className={"py-1.5 pr-3 text-center " + (t.flagged ? "font-semibold text-amber-700" : "text-slate-400")}>{t.flagged}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-1 text-xs text-slate-400">Counts are SF / JIRA. Red columns are problem statuses; "People with an issue" counts anyone with at least one of them that week. Completed = filled cells. JIRA cells are skipped on weeks the project doesn't track JIRA.</p>
+      <div className="mt-4">
+        <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Flagged records ({flagged.length})</div>
+        {flagged.length === 0 ? (
+          <p className="text-sm text-slate-400">Nothing flagged yet.{canFlag ? " Hover a week in the grid below and click ⚑ to flag it." : ""}</p>
+        ) : (
+          <ul className="divide-y divide-slate-100">
+            {shownFlags.map(({ r, wi, note }) => (
+              <li key={r.id + "_" + wi} className="flex items-start justify-between gap-3 py-1.5 text-sm">
+                <span>
+                  <span className="text-amber-600">⚑</span>{" "}
+                  <span className="font-medium text-slate-800">{r.name}</span>
+                  <span className="text-slate-500"> · week ending {fmtShort(weeks[wi])}</span>
+                  {" "}{(r.weeks[wi] || []).filter(Boolean).map((v, k) => <Pill key={k} tone={"ml-1 " + TC_COLORS[v]}>{(k === 0 ? "SF " : "JIRA ") + v}</Pill>)}
+                  <span className="block text-slate-600">{note.comment || <span className="text-slate-400">(no comment)</span>}</span>
+                  <span className="block text-xs text-slate-400">by {note.by}{note.at ? " · " + fmtShort(note.at) : ""}</span>
+                </span>
+                {canFlag && <Btn small kind="ghost" onClick={() => onOpen(r, wi)}>Edit</Btn>}
+              </li>
+            ))}
+          </ul>
+        )}
+        {flagged.length > 10 && <button type="button" className="mt-1 text-xs text-emerald-700 underline" onClick={() => setShowAll(!showAll)}>{showAll ? "Show fewer" : "Show all " + flagged.length}</button>}
+      </div>
+    </Card>
   );
 }

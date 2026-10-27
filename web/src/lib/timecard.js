@@ -60,6 +60,29 @@ export function weekComplianceFlex(rows, weekIdx, flagsById) {
   return filled ? Math.round((pro / filled) * 100) : null;
 }
 
+// statuses that mark a person-week as an outlier (the source sheet coloured the last two red)
+export const TC_PROBLEM = ["Chased", "Beyond Monday", "Not Updated", "Partial Updated"];
+
+// per-week tally like the source sheet's footer block: each status counted separately for
+// SF and JIRA, Completed = filled cells (N/A included, as in the sheet), plus flagged person-weeks.
+// JIRA cells on weeks a row's project doesn't track JIRA are left out.
+export function weekOutliers(rows, weekIdx, flagsById) {
+  const blank = () => Object.fromEntries([...TC_STATUSES.map((s) => [s, 0]), ["Completed", 0]]);
+  const out = { sf: blank(), jira: blank(), flagged: 0, problemPeople: 0 };
+  rows.forEach((r) => {
+    const [sf, jira] = r.weeks[weekIdx] || ["", ""];
+    const jiraOn = !(flagsById && flagsById[r.id] && flagsById[r.id][weekIdx] === false);
+    [["sf", sf], ["jira", jiraOn ? jira : ""]].forEach(([k, v]) => {
+      if (!v) return;
+      out[k][v] = (out[k][v] || 0) + 1;
+      out[k].Completed++;
+    });
+    if (TC_PROBLEM.includes(sf) || (jiraOn && TC_PROBLEM.includes(jira))) out.problemPeople++;
+    if (r.notes && r.notes[weekIdx]) out.flagged++;
+  });
+  return out;
+}
+
 // timecard proactiveness % -> suggested performance metric (1-5)
 export function tcSuggested(pct) {
   if (pct === null || pct === undefined) return null;

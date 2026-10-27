@@ -156,3 +156,11 @@ test("only PM and Admin can delete leave whose start date has passed", () => {
   assert.equal(canDeletePastLeave("Admin"), true);
   ["Lead", "Senior Developer", "Developer", "Viewer"].forEach((r) => assert.equal(canDeletePastLeave(r), false));
 });
+
+test("timecard.flag defaults to Lead and PM, not Developer, Senior Developer or Viewer", () => {
+  const perms = defaultPerms();
+  assert.equal(canDo(perms, "Lead", "timecard.flag"), true);
+  assert.equal(canDo(perms, "Project Manager", "timecard.flag"), true);
+  ["Developer", "Senior Developer", "Viewer"].forEach((r) => assert.equal(canDo(perms, r, "timecard.flag"), false));
+  assert.equal(canDo(mergePerms({}), "Lead", "timecard.flag"), true); // backfilled onto stored permission docs
+});

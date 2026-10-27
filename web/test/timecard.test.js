@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { excelToISO, parseTimecardGrid, tcStats, tcStatsFlex, tcSuggested, weekCompliance, weekComplianceFlex } from "../src/lib/timecard.js";
+import { excelToISO, parseTimecardGrid, tcStats, tcStatsFlex, tcSuggested, weekCompliance, weekComplianceFlex, weekOutliers } from "../src/lib/timecard.js";
 
 test("tcStats counts cells and excludes N/A from the denominator", () => {
   const s = tcStats([["Proactive", "Proactive"], ["Chased", "N/A"], ["", ""]]);
@@ -93,4 +93,23 @@ test("parseTimecardGrid reports unknown statuses and skips duplicate people", ()
   assert.equal(out.duplicates, 1);
   assert.equal(out.unknownStatuses, 1);
   assert.deepEqual(out.rows[0].weeks, [["", "Proactive"]]);
+});
+
+test("weekOutliers tallies statuses per week for SF and JIRA, with flags and problem people", () => {
+  const rows = [
+    { id: "a", weeks: [["Proactive", "Chased"]], notes: { 0: { comment: "chased twice" } } },
+    { id: "b", weeks: [["Not Updated", "Proactive"]] },
+    { id: "c", weeks: [["N/A", ""]] },
+    { id: "d", weeks: [["Proactive", "Chased"]] }, // JIRA not tracked that week -> ignored
+  ];
+  const t = weekOutliers(rows, 0, { d: [false] });
+  assert.equal(t.sf.Proactive, 2);
+  assert.equal(t.sf["Not Updated"], 1);
+  assert.equal(t.sf["N/A"], 1);
+  assert.equal(t.sf.Completed, 4);
+  assert.equal(t.jira.Chased, 1);
+  assert.equal(t.jira.Proactive, 1);
+  assert.equal(t.jira.Completed, 2);
+  assert.equal(t.problemPeople, 2); // a (JIRA Chased) and b (SF Not Updated); d's Chased is untracked
+  assert.equal(t.flagged, 1);
 });

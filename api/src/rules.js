@@ -327,6 +327,7 @@ const PERM_GROUPS = [
   { module: "Timecard", caps: [
     ["timecard.editAll", "Edit full grid · import weekly file · add weeks", { D: 0, L: 1, P: 1, V: 0 }],
     ["timecard.insights", "Timecard insights & compliance", { D: 0, L: 1, P: 1, V: 1 }],
+    ["timecard.flag", "Flag outlier weeks & comment on them", { D: 0, L: 1, P: 1, V: 0 }],
   ]},
   { module: "Allocations & Projects", caps: [
     ["alloc.view", "View allocations (plan · roster · burn)", { D: 0, L: 1, P: 1, V: 1 }],
