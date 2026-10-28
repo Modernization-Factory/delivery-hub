@@ -1,14 +1,37 @@
 import { useState, useMemo } from "react";
 import { parseISO, toISO } from "../lib/dates.js";
-import { isActiveDuring, leaveByProjectRole, leaveDaysInRange } from "../lib/leave.js";
+import { fmtShort } from "../lib/dates.js";
+import { LEAVE_COLORS, isActiveDuring, leaveByMonth, leaveByProjectRole, leaveDaysInRange, monthsBetween } from "../lib/leave.js";
 import { downloadXlsx } from "../lib/xlsx.js";
-import { Btn, Card, Stat, inputCls } from "../ui/atoms.jsx";
+import { Btn, Card, Field, Pill, Stat, inputCls } from "../ui/atoms.jsx";
 import { BRAND_FONT } from "../ui/brand.jsx";
+import { usePaged } from "../ui/usePaged.jsx";
 
 // ============================================================
-// LEAVE REPORTS (Lead / PM / Admin) — totals by role / company
+// LEAVE REPORTS (Lead / PM / Admin) — Summary · Monthly trend · By resource
 // ============================================================
 export function LeaveReports(ctx) {
+  const [tab, setTab] = useState("summary");
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-xl font-semibold text-slate-900" style={{ fontFamily: BRAND_FONT }}>Leave Reports</h2>
+        <div className="flex overflow-hidden rounded-lg border border-slate-300">
+          {[["summary", "Summary"], ["trend", "Monthly trend"], ["resource", "By resource"]].map(([v, lab]) => (
+            <button key={v} onClick={() => setTab(v)}
+              className={"px-4 py-2 text-sm font-medium transition " + (tab === v ? "mdb-btn-primary text-white" : "bg-white text-slate-600 hover:bg-slate-50")}>
+              {lab}
+            </button>
+          ))}
+        </div>
+      </div>
+      {tab === "summary" ? <LeaveSummary {...ctx} /> : <LeaveMonthly {...ctx} mode={tab} />}
+    </div>
+  );
+}
+
+// Summary — one month (or all months) by role or by company, plus project × role
+function LeaveSummary(ctx) {
   const { leaves, employees, empByName, leaveTypes, weekendDays, holidaySet, todayISO, assignments, projects } = ctx;
   const [period, setPeriod] = useState("all");
   const [groupBy, setGroupBy] = useState("role");
@@ -63,8 +86,7 @@ export function LeaveReports(ctx) {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-xl font-semibold text-slate-900" style={{ fontFamily: BRAND_FONT }}>Leave Reports</h2>
+      <div className="flex flex-wrap items-center justify-end gap-3">
         <div className="flex flex-wrap gap-2">
           <div className="flex overflow-hidden rounded-lg border border-slate-300">
             {[["role", "By role"], ["company", "By company"]].map(([v, lab]) => (
@@ -193,6 +215,206 @@ export function LeaveReports(ctx) {
           </div>
         </Card>
       )}
+    </div>
+  );
+}
+
+// Monthly trend (rows = role / company / role × company) and By resource (rows = people, each
+// expandable to their individual leaves). Both share the same filters and export to Excel.
+export function LeaveMonthly(ctx) {
+  const { mode, leaves, empByName, leaveTypes, weekendDays, holidaySet, todayISO } = ctx;
+  const all = ctx.allEmployees || ctx.employees; // reports cover history, so people since marked inactive still count
+  const r1 = (x) => Math.round(x * 10) / 10;
+  const thisYm = todayISO.slice(0, 7);
+  const firstYm = leaves.reduce((m, l) => (l.start.slice(0, 7) < m ? l.start.slice(0, 7) : m), thisYm);
+  const lastYm = leaves.reduce((m, l) => (l.end.slice(0, 7) > m ? l.end.slice(0, 7) : m), thisYm);
+  const sixBack = monthsBetween(firstYm, thisYm).slice(-6)[0];
+  const [from, setFrom] = useState(sixBack);
+  const [to, setTo] = useState(thisYm);
+  const [role, setRole] = useState("All");
+  const [company, setCompany] = useState("All");
+  const [type, setType] = useState("All");
+  const [groupBy, setGroupBy] = useState("role");
+  const [q, setQ] = useState("");
+  const [open, setOpen] = useState(null); // resource row expanded to its leaves
+
+  const allMonths = monthsBetween(firstYm < sixBack ? firstYm : sixBack, lastYm > thisYm ? lastYm : thisYm);
+  const months = from <= to ? monthsBetween(from, to) : [];
+  const roles = [...new Set(all.map((e) => e.role || "No role set"))].sort();
+  const companies = [...new Set(all.map((e) => e.company || "No company set"))].sort();
+  const monthLabel = (ym) => parseISO(ym + "-01").toLocaleDateString("en-IN", { month: "short", year: "2-digit" });
+  // employees whose master record has no role / company still count — under a visible label
+  const roleOf = (e) => (e && e.role) || "No role set";
+  const coOf = (e) => (e && e.company) || "No company set";
+  const groupOf = mode === "resource" ? (l) => l.name
+    : groupBy === "role" ? (l, e) => roleOf(e)
+    : groupBy === "company" ? (l, e) => coOf(e)
+    : (l, e) => roleOf(e) + " · " + coOf(e);
+  const filter = (l, e) => (type === "All" || l.type === type)
+    && (role === "All" || roleOf(e) === role)
+    && (company === "All" || coOf(e) === company)
+    && (mode !== "resource" || !q || l.name.toLowerCase().includes(q.toLowerCase()));
+  const rep = useMemo(() => leaveByMonth(leaves, empByName, months, leaveTypes, weekendDays, holidaySet, groupOf, filter),
+    [leaves, empByName, from, to, role, company, type, groupBy, q, mode, leaveTypes, weekendDays, holidaySet]); // eslint-disable-line react-hooks/exhaustive-deps
+  const peak = Math.max(1, ...months.map((m) => rep.totals.byMonth[m]));
+  const { rows: pageRows, pager } = usePaged(rep.rows, 25); // a person per row runs to 100+ rows
+  const rowLabel = mode === "resource" ? "Resource" : groupBy === "role" ? "Role" : groupBy === "company" ? "Company" : "Role · Company";
+  const fromS = months.length ? months[0] + "-01" : "";
+  const toS = months.length ? (() => { const [y, m] = months[months.length - 1].split("-").map(Number); return toISO(new Date(y, m, 0)); })() : "";
+  const leavesOf = (name) => leaves
+    .filter((l) => l.name === name && filter(l, empByName[name]) && l.end >= fromS && l.start <= toS)
+    .sort((a, b) => a.start.localeCompare(b.start));
+  const filterText = [role !== "All" && role, company !== "All" && company, type !== "All" && type].filter(Boolean).join(" · ") || "all roles, companies and types";
+
+  function exportExcel() {
+    const head = [rowLabel, ...(mode === "resource" ? ["Role", "Company"] : ["People"]), ...months.map(monthLabel), "Total"];
+    const body = rep.rows.map((r) => {
+      const e = empByName[r.key];
+      return [r.key, ...(mode === "resource" ? [roleOf(e), coOf(e)] : [r.people.size]), ...months.map((m) => r1(r.byMonth[m])), r1(r.total)];
+    });
+    const totalRow = ["All", ...(mode === "resource" ? ["", ""] : [rep.totals.people.size]), ...months.map((m) => r1(rep.totals.byMonth[m])), r1(rep.totals.total)];
+    const filters = [["Filters"], ["Months", monthLabel(from) + " – " + monthLabel(to)], ["Role", role], ["Company", company], ["Leave type", type], ...(mode === "resource" && q ? [["Name contains", q]] : [])];
+    const sheets = [
+      [mode === "resource" ? "By resource" : "Monthly trend", [head, ...body, totalRow]],
+      ["By leave type", [["Leave type", "Days"], ...leaveTypes.map((t) => [t.name, r1(rep.totals.byType[t.name] || 0)])]],
+    ];
+    if (mode === "resource") {
+      sheets.push(["Leave records", [["Resource", "Role", "Company", "Start", "End", "Type", "Working days in range"],
+        ...rep.rows.flatMap((r) => leavesOf(r.key).map((l) => {
+          const e = empByName[l.name];
+          return [l.name, e ? e.role : "", e ? e.company : "", l.start, l.end, l.type, r1(leaveDaysInRange(l, fromS, toS, leaveTypes, weekendDays, holidaySet))];
+        }))]]);
+    }
+    sheets.push(["Filters", filters]);
+    downloadXlsx("leave-" + (mode === "resource" ? "by-resource" : "trend-by-" + groupBy) + "-" + from + "-to-" + to + ".xlsx", sheets);
+  }
+
+  return (
+    <div className="space-y-5">
+      <Card>
+        <div className="flex flex-wrap items-end gap-3">
+          <Field label="From">
+            <select className={inputCls + " w-32"} value={from} onChange={(e) => setFrom(e.target.value)}>
+              {allMonths.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+            </select>
+          </Field>
+          <Field label="To">
+            <select className={inputCls + " w-32"} value={to} onChange={(e) => setTo(e.target.value)}>
+              {allMonths.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+            </select>
+          </Field>
+          <Field label="Role">
+            <select className={inputCls + " w-44"} value={role} onChange={(e) => setRole(e.target.value)}>
+              <option>All</option>{roles.map((r) => <option key={r}>{r}</option>)}
+            </select>
+          </Field>
+          <Field label="Company">
+            <select className={inputCls + " w-32"} value={company} onChange={(e) => setCompany(e.target.value)}>
+              <option>All</option>{companies.map((c) => <option key={c}>{c}</option>)}
+            </select>
+          </Field>
+          <Field label="Leave type">
+            <select className={inputCls + " w-32"} value={type} onChange={(e) => setType(e.target.value)}>
+              <option>All</option>{leaveTypes.map((t) => <option key={t.name}>{t.name}</option>)}
+            </select>
+          </Field>
+          {mode === "trend" ? (
+            <Field label="Rows">
+              <select className={inputCls + " w-40"} value={groupBy} onChange={(e) => setGroupBy(e.target.value)}>
+                <option value="role">By role</option>
+                <option value="company">By company</option>
+                <option value="both">Role × company</option>
+              </select>
+            </Field>
+          ) : (
+            <Field label="Name">
+              <input className={inputCls + " w-44"} placeholder="Search…" value={q} onChange={(e) => setQ(e.target.value)} />
+            </Field>
+          )}
+          <div className="ml-auto self-end"><Btn kind="ghost" small onClick={exportExcel} disabled={!months.length}>⬇ Excel</Btn></div>
+        </div>
+        {from > to && <p className="mt-2 text-sm text-red-600">"From" must be on or before "To".</p>}
+      </Card>
+
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Stat label="Leave days" value={r1(rep.totals.total)} sub={months.length + " month" + (months.length === 1 ? "" : "s") + " · " + filterText} />
+        <Stat label="People with leave" value={rep.totals.people.size} />
+        <Stat label="Avg per month" value={months.length ? r1(rep.totals.total / months.length) : 0} sub="working days" />
+        <Stat label="Busiest month" value={rep.totals.total ? monthLabel(months.reduce((a, b) => (rep.totals.byMonth[b] > rep.totals.byMonth[a] ? b : a))) : "—"}
+          sub={rep.totals.total ? r1(Math.max(...months.map((m) => rep.totals.byMonth[m]))) + " days" : "no leave in range"} />
+      </div>
+
+      {mode === "trend" && months.length > 0 && (
+        <Card title={"Leave days per month — " + filterText}>
+          <div className="flex items-end gap-2">
+            {months.map((m) => (
+              <div key={m} className="flex-1 text-center">
+                <div className="mx-auto flex h-32 w-full items-end rounded bg-slate-100" style={{ maxWidth: 56 }}>
+                  <div className="mdb-bar w-full rounded" style={{ height: Math.round((rep.totals.byMonth[m] / peak) * 100) + "%" }} title={r1(rep.totals.byMonth[m]) + " days"} />
+                </div>
+                <div className="mt-1 text-xs font-medium text-slate-600">{r1(rep.totals.byMonth[m])}</div>
+                <div className="text-xs text-slate-400">{monthLabel(m)}</div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      <Card title={(mode === "resource" ? "Leave by resource" : "Leave by " + rowLabel.toLowerCase()) + " — working days per month"}>
+        {rep.rows.length === 0 ? <p className="text-sm text-slate-500">No leave matches these filters.</p> : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
+                  <th className="py-2 pr-4">{rowLabel}</th>
+                  {mode === "resource" ? <th className="py-2 pr-4">Role · Company</th> : <th className="py-2 pr-4 text-right">People</th>}
+                  {months.map((m) => <th key={m} className="py-2 pr-3 text-right">{monthLabel(m)}</th>)}
+                  <th className="py-2 pr-4 text-right">Total</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {pageRows.map((r) => {
+                  const e = empByName[r.key];
+                  const isOpen = mode === "resource" && open === r.key;
+                  return [
+                    <tr key={r.key} className={mode === "resource" ? "cursor-pointer hover:bg-slate-50" : ""} onClick={() => mode === "resource" && setOpen(isOpen ? null : r.key)}>
+                      <td className="py-2 pr-4 font-medium text-slate-800">{mode === "resource" && <span className="mr-1 text-slate-400">{isOpen ? "▾" : "▸"}</span>}{r.key}</td>
+                      {mode === "resource"
+                        ? <td className="py-2 pr-4 text-xs text-slate-500">{e ? roleOf(e) + " · " + coOf(e) : "—"}{e && e.inactive ? " · inactive" : ""}</td>
+                        : <td className="py-2 pr-4 text-right text-slate-500">{r.people.size}</td>}
+                      {months.map((m) => <td key={m} className="py-2 pr-3 text-right">{r.byMonth[m] ? r1(r.byMonth[m]) : <span className="text-slate-300">—</span>}</td>)}
+                      <td className="py-2 pr-4 text-right font-semibold text-slate-900">{r1(r.total)}</td>
+                    </tr>,
+                    isOpen && (
+                      <tr key={r.key + "_leaves"}>
+                        <td colSpan={months.length + 3} className="bg-slate-50 px-4 py-2">
+                          <ul className="space-y-1">
+                            {leavesOf(r.key).map((l) => (
+                              <li key={l.id} className="flex items-center gap-2 text-xs text-slate-700">
+                                <Pill tone={LEAVE_COLORS[l.type] || "bg-slate-100 text-slate-600"}>{l.type}</Pill>
+                                <span>{fmtShort(l.start)}{l.start !== l.end ? " – " + fmtShort(l.end) : ""}</span>
+                                <span className="text-slate-400">{r1(leaveDaysInRange(l, fromS, toS, leaveTypes, weekendDays, holidaySet))} working day(s) in range</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </td>
+                      </tr>
+                    ),
+                  ];
+                })}
+                <tr className="border-t border-slate-200 font-semibold">
+                  <td className="py-2 pr-4">All</td>
+                  {mode === "resource" ? <td /> : <td className="py-2 pr-4 text-right">{rep.totals.people.size}</td>}
+                  {months.map((m) => <td key={m} className="py-2 pr-3 text-right">{r1(rep.totals.byMonth[m])}</td>)}
+                  <td className="py-2 pr-4 text-right">{r1(rep.totals.total)}</td>
+                </tr>
+              </tbody>
+            </table>
+            {pager}
+            <p className="mt-2 text-xs text-slate-400">Working days (weekends and holidays excluded, half days count 0.5). A leave spanning a month end counts in both months. People since marked inactive are included — this is history.{mode === "resource" ? " Click a person to see their individual leaves." : ""}</p>
+          </div>
+        )}
+      </Card>
     </div>
   );
 }

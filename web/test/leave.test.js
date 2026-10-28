@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { balancesFor, compOffDateValid, findOverlaps, isActiveDuring, isDuplicate, leaveByProjectRole, leaveDays, leaveDaysInRange, onLeaveOn } from "../src/lib/leave.js";
+import { balancesFor, compOffDateValid, findOverlaps, isActiveDuring, isDuplicate, leaveByProjectRole, leaveByMonth, leaveDays, leaveDaysInRange, monthsBetween, onLeaveOn } from "../src/lib/leave.js";
 import { HOLIDAYS, LEAVE_TYPES, NO_HOLIDAYS, WEEKEND } from "./fixtures.js";
 
 test("leaveDays counts working days and applies the type's day value", () => {
@@ -90,4 +90,27 @@ test("leaveByProjectRole parks leave of unassigned people in `unassigned`", () =
   const r = leaveByProjectRole(leaves, {}, [], "2026-07-01", "2026-07-31", LEAVE_TYPES, WEEKEND, NO_HOLIDAYS);
   assert.equal(r.unassigned.Dev, 1); // unknown employee defaults to Developer
   assert.deepEqual(r.byProject, {});
+});
+
+test("monthsBetween lists every month inclusive, across a year end", () => {
+  assert.deepEqual(monthsBetween("2026-11", "2027-02"), ["2026-11", "2026-12", "2027-01", "2027-02"]);
+  assert.deepEqual(monthsBetween("2026-05", "2026-05"), ["2026-05"]);
+});
+
+test("leaveByMonth splits a leave across months and groups by any key", () => {
+  const empByName = { Asha: { name: "Asha", role: "Developer", company: "WeKan" }, Ravi: { name: "Ravi", role: "Lead Developer", company: "MDB" } };
+  const leaves = [
+    { name: "Asha", start: "2026-07-30", end: "2026-08-04", type: "Vacation" }, // Thu-Fri Jul + Mon-Tue Aug
+    { name: "Ravi", start: "2026-08-10", end: "2026-08-10", type: "Sick" },
+    { name: "Ravi", start: "2026-09-01", end: "2026-09-01", type: "Vacation" }, // outside the months asked for
+  ];
+  const rep = leaveByMonth(leaves, empByName, ["2026-07", "2026-08"], LEAVE_TYPES, WEEKEND, NO_HOLIDAYS, (l, e) => e.role + " · " + e.company);
+  const asha = rep.rows.find((r) => r.key === "Developer · WeKan");
+  assert.deepEqual(asha.byMonth, { "2026-07": 2, "2026-08": 2 });
+  assert.equal(asha.total, 4);
+  assert.equal(rep.rows.find((r) => r.key === "Lead Developer · MDB").byType.Sick, 1);
+  assert.equal(rep.totals.total, 5);
+  assert.equal(rep.totals.people.size, 2);
+  const onlySick = leaveByMonth(leaves, empByName, ["2026-08"], LEAVE_TYPES, WEEKEND, NO_HOLIDAYS, (l) => l.name, (l) => l.type === "Sick");
+  assert.deepEqual(onlySick.rows.map((r) => r.key), ["Ravi"]);
 });

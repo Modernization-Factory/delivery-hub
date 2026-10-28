@@ -104,3 +104,42 @@ export const LEAVE_COLORS = {
   "Half Day": "bg-violet-100 text-violet-800",
   "Comp-Off": "bg-teal-100 text-teal-800",
 };
+
+// "YYYY-MM" months from fromYm to toYm inclusive
+export function monthsBetween(fromYm, toYm) {
+  const out = [];
+  let [y, m] = fromYm.split("-").map(Number);
+  const [ty, tm] = toYm.split("-").map(Number);
+  while (y < ty || (y === ty && m <= tm)) {
+    out.push(y + "-" + String(m).padStart(2, "0"));
+    if (++m > 12) { m = 1; y++; }
+  }
+  return out;
+}
+
+// Monthly leave matrix for reports and exports. Each leave is split into the working days that
+// fall in each month (a leave spanning a month end counts in both). `filter(l, emp)` narrows the
+// leaves; `groupOf(l, emp)` names the row ("Developer", "WeKan", "Developer · WeKan", a person...).
+// Returns { months, rows: [{ key, byMonth: {ym: days}, byType: {type: days}, total, people: Set }], totals }.
+export function leaveByMonth(leaves, empByName, months, leaveTypes, weekendDays, holidaySet, groupOf, filter = () => true) {
+  const bounds = months.map((ym) => {
+    const [y, m] = ym.split("-").map(Number);
+    return [ym, ym + "-01", ym + "-" + String(new Date(y, m, 0).getDate()).padStart(2, "0")];
+  });
+  const rows = {};
+  const totals = { byMonth: Object.fromEntries(months.map((m) => [m, 0])), byType: {}, total: 0, people: new Set() };
+  leaves.forEach((l) => {
+    const emp = empByName[l.name];
+    if (!filter(l, emp)) return;
+    bounds.forEach(([ym, s, e]) => {
+      if (l.end < s || l.start > e) return;
+      const days = leaveDaysInRange(l, s, e, leaveTypes, weekendDays, holidaySet);
+      if (!days) return;
+      const key = groupOf(l, emp);
+      const r = (rows[key] = rows[key] || { key, byMonth: Object.fromEntries(months.map((m) => [m, 0])), byType: {}, total: 0, people: new Set() });
+      r.byMonth[ym] += days; r.byType[l.type] = (r.byType[l.type] || 0) + days; r.total += days; r.people.add(l.name);
+      totals.byMonth[ym] += days; totals.byType[l.type] = (totals.byType[l.type] || 0) + days; totals.total += days; totals.people.add(l.name);
+    });
+  });
+  return { months, rows: Object.values(rows).sort((a, b) => b.total - a.total || a.key.localeCompare(b.key)), totals };
+}
