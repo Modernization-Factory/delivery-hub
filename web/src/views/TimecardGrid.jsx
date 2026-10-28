@@ -5,6 +5,7 @@ import { TC_COLORS, TC_PROBLEM, TC_STATUSES, parseTimecardGrid, tcStatsFlex, wee
 import { Btn, Card, Field, Notice, Pill, inputCls } from "../ui/atoms.jsx";
 import { BRAND_FONT } from "../ui/brand.jsx";
 import { usePaged } from "../ui/usePaged.jsx";
+import { FlaggedResources } from "../ui/FlaggedResources.jsx";
 
 // ============================================================
 // TIMECARD GRID
@@ -167,7 +168,8 @@ export function TimecardGrid(ctx) {
           </div>
         </Card>
       )}
-      {!isDev && <OutlierPanel rows={tcRows} weeks={tcWeeks} jiraFlags={jiraFlags} canFlag={canFlag} onOpen={(r, wi) => openFlag(r, wi)} />}
+      {!isDev && <OutlierPanel rows={tcRows} weeks={tcWeeks} jiraFlags={jiraFlags} />}
+      {!isDev && <FlaggedResources tcRows={tcRows} tcWeeks={tcWeeks} empByName={empByName} onEdit={canFlag ? openFlag : null} />}
       {flagEdit && (
         <Card title={"Outlier flag — " + flagEdit.name + " · week ending " + fmtShort(tcWeeks[flagEdit.weekIdx])}>
           <Field label="Comment (why this week is an outlier)">
@@ -281,15 +283,10 @@ export function TimecardGrid(ctx) {
 
 // Outliers by week — the source sheet's footer tally (status counts per week, SF and JIRA
 // separately, Completed), with problem statuses highlighted, plus flagged person-weeks.
-function OutlierPanel({ rows, weeks, jiraFlags, canFlag, onOpen }) {
+function OutlierPanel({ rows, weeks, jiraFlags }) {
   const [n, setN] = useState(8); // most recent weeks shown
-  const [showAll, setShowAll] = useState(false);
   const recent = weeks.map((w, i) => ({ w, i })).slice(-n).reverse();
   const tallies = recent.map(({ w, i }) => ({ w, i, t: weekOutliers(rows, i, jiraFlags) }));
-  const flagged = [];
-  rows.forEach((r) => Object.entries(r.notes || {}).forEach(([wi, note]) => flagged.push({ r, wi: Number(wi), note })));
-  flagged.sort((a, b) => b.wi - a.wi || a.r.name.localeCompare(b.r.name));
-  const shownFlags = showAll ? flagged : flagged.slice(0, 10);
   const cols = [...TC_STATUSES.filter((s) => s !== "N/A"), "N/A", "Completed"];
   const pair = (t, s) => (
     <span className="tabular-nums">{t.sf[s]}<span className="text-slate-300"> / </span>{t.jira[s]}</span>
@@ -326,29 +323,6 @@ function OutlierPanel({ rows, weeks, jiraFlags, canFlag, onOpen }) {
         </table>
       </div>
       <p className="mt-1 text-xs text-slate-400">Counts are SF / JIRA. Red columns are problem statuses; "People with an issue" counts anyone with at least one of them that week. Completed = filled cells. JIRA cells are skipped on weeks the project doesn't track JIRA.</p>
-      <div className="mt-4">
-        <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Flagged records ({flagged.length})</div>
-        {flagged.length === 0 ? (
-          <p className="text-sm text-slate-400">Nothing flagged yet.{canFlag ? " Hover a week in the grid below and click ⚑ to flag it." : ""}</p>
-        ) : (
-          <ul className="divide-y divide-slate-100">
-            {shownFlags.map(({ r, wi, note }) => (
-              <li key={r.id + "_" + wi} className="flex items-start justify-between gap-3 py-1.5 text-sm">
-                <span>
-                  <span className="text-amber-600">⚑</span>{" "}
-                  <span className="font-medium text-slate-800">{r.name}</span>
-                  <span className="text-slate-500"> · week ending {fmtShort(weeks[wi])}</span>
-                  {" "}{(r.weeks[wi] || []).filter(Boolean).map((v, k) => <Pill key={k} tone={"ml-1 " + TC_COLORS[v]}>{(k === 0 ? "SF " : "JIRA ") + v}</Pill>)}
-                  <span className="block text-slate-600">{note.comment || <span className="text-slate-400">(no comment)</span>}</span>
-                  <span className="block text-xs text-slate-400">by {note.by}{note.at ? " · " + fmtShort(note.at) : ""}</span>
-                </span>
-                {canFlag && <Btn small kind="ghost" onClick={() => onOpen(r, wi)}>Edit</Btn>}
-              </li>
-            ))}
-          </ul>
-        )}
-        {flagged.length > 10 && <button type="button" className="mt-1 text-xs text-emerald-700 underline" onClick={() => setShowAll(!showAll)}>{showAll ? "Show fewer" : "Show all " + flagged.length}</button>}
-      </div>
     </Card>
   );
 }

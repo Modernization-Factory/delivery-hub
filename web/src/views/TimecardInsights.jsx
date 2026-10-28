@@ -2,6 +2,7 @@ import { fmtShort } from "../lib/dates.js";
 import { tcStatsFlex, weekComplianceFlex } from "../lib/timecard.js";
 import { downloadXlsx } from "../lib/xlsx.js";
 import { Btn, Card, Pill, Stat } from "../ui/atoms.jsx";
+import { FlaggedResources, flaggedSheet } from "../ui/FlaggedResources.jsx";
 import { BRAND_FONT } from "../ui/brand.jsx";
 
 // ============================================================
@@ -22,6 +23,7 @@ export function TimecardInsights(ctx) {
     downloadXlsx("timecard-insights.xlsx", [
       ["Per resource", [["Resource", "Company", "Release", "Proactive %", "Proactive", "Chased", "Beyond Monday", "Not Updated", "Partial Updated"], ...scored.map((r) => [r.name, empByName[r.name] ? empByName[r.name].company : "", r.release, r.st.pct, r.st.Proactive, r.st.Chased, r.st["Beyond Monday"], r.st["Not Updated"], r.st["Partial Updated"]])]],
       ["Weekly compliance", [["Week ending", "Proactive %"], ...weekly.map((w) => [w.w, w.pct === null ? "" : w.pct])]],
+      ["Flagged weeks", flaggedSheet(tcRows, tcWeeks, empByName)],
     ]);
   }
   return (
@@ -53,6 +55,7 @@ export function TimecardInsights(ctx) {
           ))}
         </div>
       </Card>
+      <FlaggedResources {...ctx} />
       <div className="grid gap-5 lg:grid-cols-2">
         <Card title="Needs chasing — lowest proactiveness">
           <ul className="divide-y divide-slate-100">
@@ -87,3 +90,4 @@ export function TimecardInsights(ctx) {
     </div>
   );
 }
+

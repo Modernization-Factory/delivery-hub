@@ -9,7 +9,8 @@ import { ComingSoon } from "../src/views/ComingSoon.jsx";
 import { CompOffLog } from "../src/views/CompOffLog.jsx";
 import { Dashboard } from "../src/views/Dashboard.jsx";
 import { EmployeesView } from "../src/views/Employees.jsx";
-import { LeaveReports } from "../src/views/LeaveReports.jsx";
+import { LeaveMonthly, LeaveReports } from "../src/views/LeaveReports.jsx";
+import { FlaggedResources } from "../src/ui/FlaggedResources.jsx";
 import { LoginLive } from "../src/views/Login.jsx";
 import { MyLeave } from "../src/views/MyLeave.jsx";
 import { PerformanceView } from "../src/views/Performance.jsx";
@@ -80,6 +81,9 @@ export const SCREENS = {
   TeamCalendar: () => TeamCalendar(ctx),
   AllLeaveRecords: () => AllLeaveRecords(ctx),
   LeaveReports: () => LeaveReports(ctx),
+  LeaveTrend: () => LeaveMonthly({ ...ctx, mode: "trend" }),
+  LeaveByResource: () => LeaveMonthly({ ...ctx, mode: "resource" }),
+  FlaggedResources: () => FlaggedResources({ ...ctx, onEdit: noop }),
   CompOffLog: () => CompOffLog(ctx),
   TimecardGrid: () => TimecardGrid(ctx),
   TimecardInsights: () => TimecardInsights(ctx),
