@@ -61,7 +61,10 @@ const empShape = (e) => ({ id: e._id, name: e.name, email: e.email, role: e.role
 // so the login screen can tell a user who typed someone else's address apart from
 // one who typed their own.
 router.get("/me", async (req, res) => {
-  res.json({ employee: empShape(req.user.employee), role: req.user.role, email: req.user.email });
+  // `can`: this user's effective capabilities from the saved matrix, so the app's menus and
+  // buttons match what the server will allow (not the built-in defaults)
+  const can = Object.fromEntries(Object.keys(req.user.perms).map((cap) => [cap, req.can(cap)]));
+  res.json({ employee: empShape(req.user.employee), role: req.user.role, email: req.user.email, can });
 });
 
 // ---------- employees ----------

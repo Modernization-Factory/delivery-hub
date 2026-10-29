@@ -1,5 +1,6 @@
 /** DeliveryHub API — entrypoint. Kanopy-ready: PORT env, /healthz + /readyz probes. */
 const express = require("express");
+const compression = require("compression");
 const cfg = require("./config");
 const db = require("./db");
 const { resolveUser, authorizeUrl, handleCallback, logout } = require("./auth");
@@ -11,6 +12,8 @@ const fs = require("fs");
 
 const app = express();
 app.set("trust proxy", true);
+// gzip responses over 1 KB — the timecard grid alone is ~600 KB of JSON and compresses ~28x
+app.use(compression({ threshold: 1024 }));
 app.use(express.json({ limit: "1mb" }));
 
 // probes (unauthenticated)
