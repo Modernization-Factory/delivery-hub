@@ -56,3 +56,18 @@ export function phOverallStatus({ latestRag, burnVsPlan, scheduleVar, elapsedPct
   const status = latestRag || derived;
   return { status, derived, reasons, fromPM: !!latestRag };
 }
+
+// everything Program Health shows for one project, derived from raw facts
+export function phRowFor(p, { weeklyHealth, raid, milestones, todayISO }) {
+  const entries = weeklyHealth.filter((w) => w.projectId === p.id).sort((a, b) => a.week.localeCompare(b.week));
+  const el = phElapsedPct(p.start, p.end, todayISO);
+  const sv = phScheduleVar(p.totalStories, p.doneStories, el);
+  const bv = phBurnVsPlan(entries);
+  const lw = entries[entries.length - 1] || null;
+  const hr = phHighRisks(raid, p.id);
+  const ms = milestones.filter((m) => m.projectId === p.id);
+  const open = ms.filter((m) => m.status !== "Complete").sort((a, b) => ((a.planned || "9999") < (b.planned || "9999") ? -1 : 1));
+  const overdue = open.filter((m) => m.planned && m.planned < todayISO).length;
+  const st = phOverallStatus({ latestRag: lw ? lw.rag : null, burnVsPlan: bv, scheduleVar: sv.variance, elapsedPct: el, highRisks: hr, overdueMilestones: overdue });
+  return { p, entries, el, sv, bv, lw, hr, ms, nextMs: open[0] || null, overdue, st };
+}

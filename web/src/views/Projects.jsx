@@ -10,7 +10,8 @@ import { BRAND_FONT } from "../ui/brand.jsx";
 import { usePaged } from "../ui/usePaged.jsx";
 
 export function ProjectsView(ctx) {
-  const { projects, setProjects, assignments, employees, empByName, weekendDays, holidaySet, nextId, todayISO, raid, milestones } = ctx;
+  const { setProjects, assignments, employees, empByName, weekendDays, holidaySet, nextId, todayISO, raid, milestones } = ctx;
+  const projects = ctx.allProjects || ctx.projects; // closed projects stay visible here (and only here)
   const canConfigure = ctx.can("projects.manage");
   const [year, setYear] = useState(2026);
   const [pform, setPform] = useState({ name: "", phases: "", streams: "", description: "", linkLabel: "", linkUrl: "", start: "", end: "", targetMargin: "", pm: "", currentPhase: "" });
@@ -23,6 +24,9 @@ export function ProjectsView(ctx) {
   const [q, setQ] = useState("");
   const [flt, setFlt] = useState("all");
   const [sortBy, setSortBy] = useState("name");
+  const [status, setStatus] = useState("open"); // open | closed | all
+  const [closing, setClosing] = useState(null); // { id, on, note } while the closure dialog is open
+  const [busy, setBusy] = useState(false);
   const r1 = (x) => Math.round(x * 10) / 10;
   const marginsVisible = ctx.user.role === "Project Manager" || ctx.user.role === "Admin";
   const burn = useMemo(() => computeBurn(assignments, ctx.allEmployees, empByName, year, weekendDays, holidaySet),
@@ -40,6 +44,8 @@ export function ProjectsView(ctx) {
   });
   const needle = q.trim().toLowerCase();
   const filtered = rows.filter((r) => {
+    if (status === "open" && r.p.closedAt) return false;
+    if (status === "closed" && !r.p.closedAt) return false;
     if (needle && !(r.p.name.toLowerCase().includes(needle) || (r.p.pm || "").toLowerCase().includes(needle) || (r.p.streams || []).some((s) => s.toLowerCase().includes(needle)))) return false;
     if (flt === "pastdue") return r.pastDue;
     if (flt === "nopm") return !r.p.pm;
@@ -56,6 +62,27 @@ export function ProjectsView(ctx) {
     return a.p.name.localeCompare(b.p.name);
   });
   const { rows: pageRows, pager } = usePaged(sorted, 25);
+  // assignments a closure on `on` would end (running past it) or leave unstarted (starting after it)
+  const closureImpact = (pid, on) => ({
+    ending: assignments.filter((a) => a.projectId === pid && a.from <= on && (!a.to || a.to > on)),
+    future: assignments.filter((a) => a.projectId === pid && a.from > on),
+  });
+  async function confirmClose(p) {
+    setBusy(true); setMsg(null);
+    try {
+      const r = await ctx.setProjectClosed(p.id, { on: closing.on, note: closing.note });
+      setMsg({ tone: "ok", text: p.name + " closed on " + fmt(closing.on) + "." + (r && r.endedAssignments ? " " + r.endedAssignments + " assignment(s) ended on that date." : "") + (r && r.futureAssignments ? " " + r.futureAssignments + " future assignment(s) left as they are — delete them in Allocations if they won't happen." : "") });
+      setClosing(null);
+    } catch (e) { setMsg({ tone: "error", text: "Couldn't close the project: " + e.message }); }
+    finally { setBusy(false); }
+  }
+  async function reopen(p) {
+    if (!window.confirm("Reopen " + p.name + "? It returns to Program Health, runway and the pickers. Assignments ended at closure stay ended.")) return;
+    setBusy(true); setMsg(null);
+    try { await ctx.setProjectClosed(p.id, null); setMsg({ tone: "ok", text: p.name + " reopened." }); }
+    catch (e) { setMsg({ tone: "error", text: "Couldn't reopen the project: " + e.message }); }
+    finally { setBusy(false); }
+  }
   const sel = rows.find((r) => r.p.id === selId) || null;
 
   const peopleToday = new Set();
@@ -146,7 +173,7 @@ export function ProjectsView(ctx) {
       {!sel && (
         <>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Stat label="Projects" value={rows.length} sub={rows.filter((r) => r.todayActive.size > 0).length + " staffed today"} />
+            <Stat label="Open projects" value={rows.filter((r) => !r.p.closedAt).length} sub={rows.filter((r) => !r.p.closedAt && r.todayActive.size > 0).length + " staffed today · " + rows.filter((r) => r.p.closedAt).length + " closed"} />
             <Stat label="People on projects today" value={peopleToday.size} sub="distinct, across the portfolio" />
             <Stat label={"Effort " + year} value={r1(totalEffort)} sub="person-days allocated" />
             <Stat label="Needs attention" value={needsAttention} sub="past target end or milestone overdue" />
@@ -156,17 +183,20 @@ export function ProjectsView(ctx) {
             right={
               <div className="flex flex-wrap items-center gap-2">
                 <input className="rounded-lg border border-slate-300 px-2.5 py-1 text-sm" placeholder="Search name, PM or stream" value={q} onChange={(e) => setQ(e.target.value)} />
+                <select className="rounded-lg border border-slate-300 px-2 py-1 text-sm" value={status} onChange={(e) => setStatus(e.target.value)}>
+                  <option value="open">Open projects</option><option value="closed">Closed projects</option><option value="all">Open + closed</option>
+                </select>
                 <select className="rounded-lg border border-slate-300 px-2 py-1 text-sm" value={flt} onChange={(e) => setFlt(e.target.value)}>
-                  <option value="all">All projects</option><option value="attention">Needs attention</option><option value="active">Staffed today</option><option value="idle">Nobody today</option><option value="pastdue">Past target end</option><option value="nopm">No PM</option>
+                  <option value="all">Any state</option><option value="attention">Needs attention</option><option value="active">Staffed today</option><option value="idle">Nobody today</option><option value="pastdue">Past target end</option><option value="nopm">No PM</option>
                 </select>
                 <select className="rounded-lg border border-slate-300 px-2 py-1 text-sm" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
                   <option value="name">Sort: name</option><option value="effort">Sort: most effort</option><option value="people">Sort: most people today</option><option value="end">Sort: earliest end</option><option value="risk">Sort: most open risks</option>
                 </select>
                 <Btn kind="ghost" small onClick={() => {
                   downloadXlsx("projects.xlsx", [["Projects", [
-                    ["Project", "PM", "Current phase", "Start", "Target end", "People today", "People " + year, "Effort " + year + " (days)", "Open RAID", "Pending milestones", "Overdue milestones", "Streams"].concat(marginsVisible ? ["Target margin %"] : []),
+                    ["Project", "Status", "PM", "Current phase", "Start", "Target end", "People today", "People " + year, "Effort " + year + " (days)", "Open RAID", "Pending milestones", "Overdue milestones", "Streams"].concat(marginsVisible ? ["Target margin %"] : []),
                     ...sorted.map((r) => {
-                      const base = [r.p.name, r.p.pm || "", r.p.currentPhase || "", r.p.start || "", r.p.end || "", r.todayActive.size, r.g.people.size, r1(r.g.total), r.raidOpen, r.msPending, r.msOverdue, (r.p.streams || []).join(", ")];
+                      const base = [r.p.name, r.p.closedAt ? "Closed " + r.p.closedAt : "Open", r.p.pm || "", r.p.currentPhase || "", r.p.start || "", r.p.end || "", r.todayActive.size, r.g.people.size, r1(r.g.total), r.raidOpen, r.msPending, r.msOverdue, (r.p.streams || []).join(", ")];
                       return marginsVisible ? base.concat([r.p.targetMargin ?? ""]) : base;
                     }),
                   ]]]);
@@ -188,6 +218,7 @@ export function ProjectsView(ctx) {
                       <tr key={r.p.id} className="cursor-pointer align-top hover:bg-slate-50" onClick={() => { setSelId(r.p.id); setPanel(null); setPedit(null); }}>
                         <td className="py-2 pr-3 font-medium text-slate-800">
                           {r.p.name}
+                          {r.p.closedAt && <Pill tone="ml-1 bg-slate-200 text-slate-600">Closed {fmtShort(r.p.closedAt)}</Pill>}
                           {r.p.phases.length > 1 && <span className="ml-1 text-xs text-slate-400">{r.p.phases.length} phases</span>}
                         </td>
                         <td className="py-2 pr-3">{r.p.pm || <span className="text-amber-600">unassigned</span>}</td>
@@ -241,8 +272,10 @@ export function ProjectsView(ctx) {
               <span className="ml-auto flex gap-1">
                 <Btn small kind="ghost" disabled={idx <= 0} onClick={() => goto(idx - 1)}>‹ Prev</Btn>
                 <Btn small kind="ghost" disabled={idx < 0 || idx >= sorted.length - 1} onClick={() => goto(idx + 1)}>Next ›</Btn>
-                {canConfigure && (
+                {canConfigure && p.closedAt && <Btn small kind="ghost" disabled={busy} onClick={() => reopen(p)}>Reopen project</Btn>}
+                {canConfigure && !p.closedAt && (
                   <>
+                    <Btn small disabled={busy} onClick={() => { setClosing({ id: p.id, on: todayISO, note: "" }); setPedit(null); }}>Close project</Btn>
                     <Btn small kind="ghost" onClick={() => setPedit({ id: p.id, phases: p.phases.join(", "), streams: (p.streams || []).join(", "), description: p.description || "", linkLabel: p.linkLabel || "", linkUrl: p.linkUrl || "", start: p.start || "", end: p.end || "", targetMargin: p.targetMargin ?? "", pm: p.pm || "", currentPhase: p.currentPhase || "" })}>Edit</Btn>
                     <Btn small kind="danger" onClick={() => deleteProject(p)}>Delete</Btn>
                   </>
@@ -250,6 +283,30 @@ export function ProjectsView(ctx) {
               </span>
             </div>
 
+            {p.closedAt && (
+              <Notice tone="warn">Closed on {fmt(p.closedAt)}{p.closedBy ? " by " + p.closedBy : ""}{p.closureNote ? " — " + p.closureNote : ""}. It's no longer tracked in Program Health, runway or the pickers, and new assignments, weekly entries, RAID and milestones are blocked. History below is kept.</Notice>
+            )}
+            {closing && closing.id === p.id && (() => {
+              const imp = closureImpact(p.id, closing.on || todayISO);
+              return (
+                <Card title={"Close " + p.name}>
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <Field label="Closure date"><input type="date" className={inputCls} value={closing.on} onChange={(e) => setClosing({ ...closing, on: e.target.value })} /></Field>
+                    <div className="sm:col-span-2"><Field label="Closure note (optional)"><input className={inputCls} maxLength={500} value={closing.note} onChange={(e) => setClosing({ ...closing, note: e.target.value })} placeholder="e.g. R2 delivered and signed off" /></Field></div>
+                  </div>
+                  <ul className="mt-3 space-y-1 text-sm text-slate-700">
+                    <li>· Drops out of Program Health, Remaining Runway, every project picker and the integration feed.</li>
+                    <li>· {imp.ending.length ? <b>{imp.ending.length} assignment(s) will end on {fmt(closing.on)}: </b> : "No open assignments to end."}{imp.ending.slice(0, 6).map((a) => a.name).join(", ")}{imp.ending.length > 6 ? " +" + (imp.ending.length - 6) + " more" : ""}</li>
+                    {imp.future.length > 0 && <li className="text-amber-700">· {imp.future.length} assignment(s) start after that date and are left as they are — delete them in Allocations if they won't happen.</li>}
+                    <li>· Past leave, allocations, effort, RAID and milestones are kept. You can reopen it later.</li>
+                  </ul>
+                  <div className="mt-3 flex gap-2">
+                    <Btn small kind="danger" disabled={busy || !closing.on} onClick={() => confirmClose(p)}>Close project</Btn>
+                    <Btn small kind="ghost" disabled={busy} onClick={() => setClosing(null)}>Cancel</Btn>
+                  </div>
+                </Card>
+              );
+            })()}
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <Stat label="On it today" value={todayActive.size} sub={todayActive.size ? [...todayActive].slice(0, 3).join(", ") + (todayActive.size > 3 ? " +" + (todayActive.size - 3) : "") : "nobody assigned today"} />
               <Stat label={"People in " + year} value={g.people.size} sub="distinct assignees" />
@@ -305,8 +362,8 @@ export function ProjectsView(ctx) {
                       {(p.streams || []).length === 0 && <span className="text-xs text-slate-400">No streams defined — assignments on this project carry no stream.</span>}
                     </div>
                   </div>
-                  <label className={"mt-3 inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm " + (canConfigure ? "cursor-pointer border-slate-300 text-slate-700 hover:bg-slate-50" : "border-slate-200 text-slate-400")}>
-                    <input type="checkbox" className="h-4 w-4 accent-emerald-700" checked={p.trackJira !== false} disabled={!canConfigure} onChange={() => toggleJira(p)} />
+                  <label className={"mt-3 inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm " + (canConfigure && !p.closedAt ? "cursor-pointer border-slate-300 text-slate-700 hover:bg-slate-50" : "border-slate-200 text-slate-400")}>
+                    <input type="checkbox" className="h-4 w-4 accent-emerald-700" checked={p.trackJira !== false} disabled={!canConfigure || !!p.closedAt} onChange={() => toggleJira(p)} />
                     Count JIRA in timecard score
                   </label>
                 </>
@@ -348,8 +405,8 @@ export function ProjectsView(ctx) {
                 Milestones ({msPending} pending / {msAll})
               </Btn>
             </div>
-            {panel?.id === p.id && panel.tab === "raid" && <RaidPanel {...ctx} project={p} canEdit={canRaid} />}
-            {panel?.id === p.id && panel.tab === "ms" && <MilestonePanel {...ctx} project={p} canEdit={canRaid} />}
+            {panel?.id === p.id && panel.tab === "raid" && <RaidPanel {...ctx} project={p} canEdit={canRaid && !p.closedAt} />}
+            {panel?.id === p.id && panel.tab === "ms" && <MilestonePanel {...ctx} project={p} canEdit={canRaid && !p.closedAt} />}
           </>
         );
       })()}

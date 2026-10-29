@@ -216,8 +216,10 @@ router.post("/timecards/import", requireCap("timecard.editAll"), upload.single("
 });
 
 // ---------- projects & assignments ----------
-router.get("/projects", requireCap("projects.view"), async (_req, res) => {
-  res.json(await col("projects").find().sort({ name: 1 }).toArray());
+router.get("/projects", async (req, res) => {
+  const all = await col("projects").find().sort({ name: 1 }).toArray();
+  // without projects.view: just enough to name a person's own project on their dashboard
+  res.json(req.can("projects.view") ? all : all.map((p) => ({ _id: p._id, name: p.name, phases: p.phases || [], closedAt: p.closedAt || null })));
 });
 router.post("/projects", requireCap("projects.manage"), audit("project.create"), async (req, res) => {
   const { name, phases, trackJira } = req.body;
@@ -248,20 +250,51 @@ router.put("/projects/:id", audit("project.update"), async (req, res) => {
   await col("projects").updateOne({ _id: new ObjectId(req.params.id) }, { $set });
   res.json({ ok: true });
 });
+// new work can't be booked against a closed project
+async function refuseClosed(projectId, res) {
+  const p = projectId && await col("projects").findOne({ _id: oid(String(projectId)) }, { projection: { closedAt: 1, name: 1 } });
+  if (p && p.closedAt) { res.status(422).json({ error: "project_closed", detail: p.name + " is closed — reopen it on the Projects page first." }); return true; }
+  return false;
+}
+// Close a completed project: it drops out of Program Health, runway, pickers and the
+// integration feed; open assignments end on the closure date. History is kept. Reopen undoes it.
+router.put("/projects/:id/close", requireCap("projects.manage"), audit("project.close"), async (req, res) => {
+  const id = new ObjectId(req.params.id);
+  const p = await col("projects").findOne({ _id: id });
+  if (!p) return res.status(404).json({ error: "not_found" });
+  if (req.body && req.body.reopen) {
+    await col("projects").updateOne({ _id: id }, { $unset: { closedAt: "", closedBy: "", closureNote: "" }, $set: { updatedAt: new Date() } });
+    return res.json({ ok: true, reopened: true });
+  }
+  if (p.closedAt) return res.status(409).json({ error: "already_closed" });
+  const on = (req.body && req.body.on) || R.toISO(new Date());
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(on)) return res.status(422).json({ error: "invalid_date" });
+  // assignments running past the closure date end on it
+  const ended = await col("assignments").updateMany(
+    { projectId: id, $or: [{ to: null }, { to: { $gt: day(on) } }], from: { $lte: day(on) } },
+    { $set: { to: day(on), updatedAt: new Date(), endedBy: "project.close" } });
+  const future = await col("assignments").countDocuments({ projectId: id, from: { $gt: day(on) } });
+  await col("projects").updateOne({ _id: id }, { $set: { closedAt: day(on), closedBy: req.user.employee.name, closureNote: String((req.body && req.body.note) || "").trim().slice(0, 500), updatedAt: new Date() } });
+  res.json({ ok: true, endedAssignments: ended.modifiedCount, futureAssignments: future });
+});
 router.delete("/projects/:id", requireCap("projects.manage"), audit("project.delete"), async (req, res) => {
   const inUse = await col("assignments").countDocuments({ projectId: new ObjectId(req.params.id) });
   if (inUse) return res.status(409).json({ error: "has_assignments", count: inUse });
   await col("projects").deleteOne({ _id: new ObjectId(req.params.id) });
   res.json({ ok: true });
 });
-router.get("/assignments", requireCap("alloc.view"), async (_req, res) => {
-  res.json(await col("assignments").find().toArray());
+router.get("/assignments", async (req, res) => {
+  // everyone may read their own assignments (dashboard "my project"); the full plan needs alloc.view
+  const mine = req.query.mine === "1";
+  if (!mine && !req.can("alloc.view")) return res.status(403).json({ error: "forbidden" });
+  res.json(await col("assignments").find(mine ? { employeeId: req.user.employee._id } : {}).toArray());
 });
 router.post("/assignments", requireCap("alloc.edit"), audit("assignment.create"), async (req, res) => {
   const { employeeId, projectId, phase, stream, from, to } = req.body;
   const emp = await col("employees").findOne({ _id: new ObjectId(employeeId) });
   if (!emp) return res.status(404).json({ error: "employee_not_found" });
   if (emp.inactive) return res.status(422).json({ error: "employee_inactive", detail: emp.name + " is marked inactive." });
+  if (await refuseClosed(projectId, res)) return;
   if (!from) return res.status(422).json({ error: "from_required" });
   if (to && to < from) return res.status(422).json({ error: "invalid_range" });
   if (emp.endDate && from > R.toISO(emp.endDate)) return res.status(422).json({ error: "starts_after_end_date" });
@@ -301,7 +334,7 @@ router.get("/runway", requireCap("runway.view"), async (_req, res) => {
   const nameById = Object.fromEntries(employees.map((e) => [String(e._id), e.name]));
   const assignments = (await col("assignments").find().toArray()).map((a) => ({ id: String(a._id), name: nameById[String(a.employeeId)], projectId: String(a.projectId), from: iso(a.from), to: iso(a.to), weeklyHours: a.weeklyHours || 40 }));
   const leaves = (await col("leaves").find().toArray()).map((l) => ({ name: nameById[String(l.employeeId)], start: iso(l.start), end: iso(l.end), type: l.type }));
-  const projects = await col("projects").find().toArray();
+  const projects = await col("projects").find({ closedAt: null }).toArray();
   const today = R.toISO(new Date());
   res.json(projects.map((p) => ({ projectId: p._id, name: p.name, runway: R.computeRunway({ id: String(p._id), funding: p.funding }, empByName, assignments, leaves, leaveTypes, weekendDays, holidaySet, today) })));
 });
@@ -325,6 +358,7 @@ router.get("/weeklyhealth", requireCap("ph.view"), async (_req, res) => {
 router.post("/weeklyhealth", requireCap("ph.weekly"), audit("ph.weekly.create"), async (req, res) => {
   const { projectId, week, hoursPlanned, hoursBurnt, scopeChanges, rag, oneLiner } = req.body;
   if (!projectId || !week) return res.status(422).json({ error: "projectId_week_required" });
+  if (await refuseClosed(projectId, res)) return;
   const dup = await col("weeklyHealth").findOne({ projectId: oid(projectId), week: day(week) });
   if (dup) return res.status(409).json({ error: "entry_exists_for_week" });
   const doc = { projectId: oid(projectId), week: day(week), hoursPlanned: Number(hoursPlanned) || 0, hoursBurnt: Number(hoursBurnt) || 0, scopeChanges: !!scopeChanges, rag: rag || "Green", oneLiner: oneLiner || "", createdBy: req.user.employee.name, createdAt: new Date(), updatedAt: new Date() };
@@ -388,6 +422,7 @@ router.get("/raid", requireCap("projects.view"), async (_req, res) => {
 router.post("/raid", requireCap("projects.raid"), audit("raid.create"), async (req, res) => {
   const { projectId, type, desc, impact, probability, owner, targetDate, status, link, comments } = req.body;
   if (!projectId || !desc || !["Risk", "Issue", "Dependency", "Decision"].includes(type)) return res.status(422).json({ error: "projectId_type_desc_required" });
+  if (await refuseClosed(projectId, res)) return;
   const doc = { projectId: oid(projectId), type, desc: String(desc).trim(), impact: impact || "M", probability: probability || "M", owner: owner || "", targetDate: targetDate ? day(targetDate) : null, status: status || "Open", link: link || "", comments: comments || "", createdBy: req.user.employee.name, createdAt: new Date(), updatedAt: new Date() };
   const r2 = await col("raid").insertOne(doc);
   res.status(201).json(raidShape({ ...doc, _id: r2.insertedId }));
@@ -421,6 +456,7 @@ router.get("/milestones", requireCap("projects.view"), async (_req, res) => {
 router.post("/milestones", requireCap("projects.raid"), audit("milestone.create"), async (req, res) => {
   const { projectId, name, phase, planned, actual, status, rag, comments } = req.body;
   if (!projectId || !name) return res.status(422).json({ error: "projectId_name_required" });
+  if (await refuseClosed(projectId, res)) return;
   const doc = { projectId: oid(projectId), name: String(name).trim(), phase: phase || "", planned: planned ? day(planned) : null, actual: actual ? day(actual) : null, status: status || "Not Started", rag: rag || "Green", comments: comments || "", createdBy: req.user.employee.name, createdAt: new Date(), updatedAt: new Date() };
   const r2 = await col("milestones").insertOne(doc);
   res.status(201).json(msShape({ ...doc, _id: r2.insertedId }));
@@ -453,6 +489,7 @@ router.get("/plans", requireCap("plans.view"), async (_req, res) => {
 router.post("/plans", requireCap("plans.manage"), audit("plan.create"), async (req, res) => {
   const { name, projectId, phase, startYm, monthsCount, mult, multOverrides, rows } = req.body;
   if (!name || !projectId || !/^\d{4}-\d{2}$/.test(startYm || "")) return res.status(422).json({ error: "name_project_startYm_required" });
+  if (await refuseClosed(projectId, res)) return;
   const count = Math.max(1, Math.min(12, Number(monthsCount) || 6));
   const doc = {
     name: String(name).trim(), projectId: oid(projectId), phase: phase || null,

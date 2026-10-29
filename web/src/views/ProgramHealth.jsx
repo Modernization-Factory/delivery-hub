@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Table } from "lucide-react";
 import { fmt, parseISO, toISO } from "../lib/dates.js";
-import { PH_RAG_ACCENT, PH_RAG_TONE, PH_STAGES, phBurnVsPlan, phEffortVar, phElapsedPct, phHighRisks, phOverallStatus, phPct, phScheduleVar } from "../lib/programHealth.js";
+import { PH_RAG_ACCENT, PH_RAG_TONE, PH_STAGES, phBurnVsPlan, phEffortVar, phElapsedPct, phHighRisks, phOverallStatus, phPct, phRowFor, phScheduleVar } from "../lib/programHealth.js";
 import { RAG_OPTS } from "../lib/raid.js";
 import { downloadXlsx } from "../lib/xlsx.js";
 import { Btn, Card, Field, Notice, Pill, Stat, inputCls } from "../ui/atoms.jsx";
@@ -25,19 +25,7 @@ export function ProgramHealthView(ctx) {
   const latestWeekly = (pid) => weeklyHealth.filter((w) => w.projectId === pid).sort((a, b) => b.week.localeCompare(a.week))[0] || null;
 
   // one derivation per project, shared by the tiles, the table and the detail view
-  const phRow = (p) => {
-    const entries = weeklyHealth.filter((w) => w.projectId === p.id).sort((a, b) => a.week.localeCompare(b.week));
-    const el = phElapsedPct(p.start, p.end, todayISO);
-    const sv = phScheduleVar(p.totalStories, p.doneStories, el);
-    const bv = phBurnVsPlan(entries);
-    const lw = entries[entries.length - 1] || null;
-    const hr = phHighRisks(raid, p.id);
-    const ms = milestones.filter((m) => m.projectId === p.id);
-    const open = ms.filter((m) => m.status !== "Complete").sort((a, b) => ((a.planned || "9999") < (b.planned || "9999") ? -1 : 1));
-    const overdue = open.filter((m) => m.planned && m.planned < todayISO).length;
-    const st = phOverallStatus({ latestRag: lw ? lw.rag : null, burnVsPlan: bv, scheduleVar: sv.variance, elapsedPct: el, highRisks: hr, overdueMilestones: overdue });
-    return { p, entries, el, sv, bv, lw, hr, ms, nextMs: open[0] || null, overdue, st };
-  };
+  const phRow = (p) => phRowFor(p, { weeklyHealth, raid, milestones, todayISO });
   const rows = projects.map(phRow);
   const [selId, setSelId] = useState(null);
   const [portView, setPortView] = useState("tiles");
@@ -79,7 +67,7 @@ export function ProgramHealthView(ctx) {
     setMsg({ tone: "ok", text: "Weekly health saved." });
   }
   const [whProj, setWhProj] = useState("all");
-  const whRows = weeklyHealth.filter((w) => whProj === "all" || w.projectId === whProj).sort((a, b) => b.week.localeCompare(a.week));
+  const whRows = weeklyHealth.filter((w) => projects.some((p) => p.id === w.projectId) && (whProj === "all" || w.projectId === whProj)).sort((a, b) => b.week.localeCompare(a.week));
   const { rows: whPage, pager: whPager } = usePaged(whRows, 10);
 
   // ---- pipeline ----
@@ -100,7 +88,7 @@ export function ProgramHealthView(ctx) {
   }
 
   const pName = (pid) => { const p = projects.find((x) => x.id === pid); return p ? p.name : "?"; };
-  const openHigh = raid.filter((x) => x.status !== "Closed" && x.impact === "H");
+  const openHigh = raid.filter((x) => x.status !== "Closed" && x.impact === "H" && projects.some((p) => p.id === x.projectId)); // open projects only
 
   return (
     <div className="space-y-4">

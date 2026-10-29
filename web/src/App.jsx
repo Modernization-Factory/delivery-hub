@@ -99,10 +99,10 @@ export default function App() {
   }
   async function loadProjects() {
     const ps = await api("/projects");
-    setProjects0(ps.map((p) => ({ id: String(p._id), name: p.name, phases: p.phases || [], streams: p.streams || [], description: p.description || "", linkLabel: p.linkLabel || "", linkUrl: p.linkUrl || "", start: dstr(p.start), end: dstr(p.end), targetMargin: p.targetMargin ?? null, pm: p.pm || null, currentPhase: p.currentPhase || null, totalStories: p.totalStories ?? null, doneStories: p.doneStories ?? null, currentMargin: p.currentMargin ?? null, keyUpdate: p.keyUpdate || "", trackJira: p.trackJira !== false, funding: p.funding || null })));
+    setProjects0(ps.map((p) => ({ id: String(p._id), name: p.name, phases: p.phases || [], streams: p.streams || [], description: p.description || "", linkLabel: p.linkLabel || "", linkUrl: p.linkUrl || "", start: dstr(p.start), end: dstr(p.end), targetMargin: p.targetMargin ?? null, pm: p.pm || null, currentPhase: p.currentPhase || null, totalStories: p.totalStories ?? null, doneStories: p.doneStories ?? null, currentMargin: p.currentMargin ?? null, keyUpdate: p.keyUpdate || "", trackJira: p.trackJira !== false, funding: p.funding || null, closedAt: dstr(p.closedAt), closedBy: p.closedBy || "", closureNote: p.closureNote || "" })));
   }
   async function loadAssignments(empNameById) {
-    const as2 = await api("/assignments");
+    const as2 = await api("/assignments").catch((e) => (e.status === 403 ? api("/assignments?mine=1") : Promise.reject(e)));
     setAssignments0(as2.map((a) => ({ id: String(a._id), name: empNameById[String(a.employeeId)], projectId: String(a.projectId), phase: a.phase || null, stream: a.stream || null, from: dstr(a.from), to: dstr(a.to), weeklyHours: a.weeklyHours || 40 })).filter((a) => a.name));
   }
   async function loadScores(empNameById) {
@@ -205,7 +205,15 @@ export default function App() {
     await api("/admin/employees/" + id + "/admin", { method: "PUT", body: { isAdmin } });
     setEmployees0((es) => es.map((e) => (e.id === id ? { ...e, isAdmin } : e)));
   }
-  const setProjects = (next) => {
+  // close / reopen go through their own endpoint (they also end open assignments), then reload
+  async function setProjectClosed(id, close) {
+    const r = await api("/projects/" + id + "/close", { method: "PUT", body: close ? { on: close.on, note: close.note } : { reopen: true } });
+    await Promise.all([loadProjects(), loadAssignments(empNameByIdNow())]);
+    return r;
+  }
+  const setProjects = (next0) => {
+    // most views get open projects only — never let a save drop closed ones from state
+    const next = [...next0, ...projects.filter((p) => p.closedAt && !next0.some((x) => x.id === p.id))];
     const prev = projects; setProjects0(next);
     diffSync(prev, next, {
       create: (p) => fire(api("/projects", { method: "POST", body: { name: p.name, phases: p.phases, streams: p.streams || [], description: p.description || "", linkLabel: p.linkLabel || "", linkUrl: p.linkUrl || "", start: p.start || null, end: p.end || null, targetMargin: p.targetMargin ?? null, pm: p.pm || null, currentPhase: p.currentPhase || null, trackJira: p.trackJira !== false } }).then(loadProjects)),
@@ -348,6 +356,8 @@ export default function App() {
   // employees marked inactive in the master drop out of every picker, roster and grid; their history stays in reports
   const activeEmployees = useMemo(() => employees.filter((e) => !e.inactive), [employees]);
   const inactiveNames = useMemo(() => new Set(employees.filter((e) => e.inactive).map((e) => e.name)), [employees]);
+  // closed projects drop out of pickers, Program Health, runway and burn; the Projects page and history keep them
+  const openProjects = useMemo(() => projects.filter((p) => !p.closedAt), [projects]);
   const activeTcRows = useMemo(() => tcRows.filter((r) => !inactiveNames.has(r.name)), [tcRows, inactiveNames]);
   // per timecard row, per week: does JIRA count toward the score? (driven by the project's trackJira setting)
   const jiraFlags = useMemo(() => {
@@ -454,7 +464,7 @@ export default function App() {
 
   const ctx = {
     user, employees: activeEmployees, allEmployees: employees, empByName, leaves, comps, tcRows: activeTcRows, tcWeeks, leaveTypes, weekendDays, holidays, holidaySet,
-    setTcWeeks, assignments, setAssignments, projects, setProjects, jiraFlags,
+    setTcWeeks, assignments, setAssignments, projects: openProjects, allProjects: projects, setProjects, setProjectClosed, jiraFlags,
     scores, setScores, perfCfg, setPerfCfg, can, perms, setPerms, extLinks, setExtLinks, plans, setPlans, empFields, setEmpFields, raid, setRaid, milestones, setMilestones, weeklyHealth, setWeeklyHealth, pipeline, setPipeline, uploadTimecardFile, setTcFlag,
     todayISO, canManage, canConfigure, isDev, isAdmin,
     setLeaves, setComps, setTcRows, setEmployees, setLeaveTypes, setWeekendDays, setHolidays, nextId, setNav, setEmployeeAdmin,
