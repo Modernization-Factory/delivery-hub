@@ -75,12 +75,19 @@ const healthRow = {
   st: { status: "Amber", derived: "Red", reasons: ["burn 20% over plan"], fromPM: true },
 };
 
+// the same fixtures seen through another role's permissions
+const asRole = (name, role) => ({ ...ctx, user: { name, role, email: name.toLowerCase() + "@example.com" }, can: (cap) => canDo(defaultPerms(), role, cap) });
+ctx.assignments = ctx.assignments || [];
 export const SCREENS = {
   Dashboard: () => Dashboard(ctx),
   MyLeave: () => MyLeave(ctx),
   TeamCalendar: () => TeamCalendar(ctx),
   AllLeaveRecords: () => AllLeaveRecords(ctx),
   LeaveReports: () => LeaveReports(ctx),
+  DashboardDeveloper: () => Dashboard(asRole("Asha", "Developer")),
+  DashboardLead: () => Dashboard(asRole("Ravi", "Lead")),
+  DashboardAdmin: () => Dashboard(asRole("Dushyant", "Admin")),
+  ProjectsWithClosed: () => ProjectsView({ ...ctx, allProjects: [...ctx.projects, { ...ctx.projects[1], id: "p9", name: "Old Job", closedAt: "2026-06-30", closedBy: "Mia", closureNote: "delivered" }] }),
   LeaveTrend: () => LeaveMonthly({ ...ctx, mode: "trend" }),
   LeaveByResource: () => LeaveMonthly({ ...ctx, mode: "resource" }),
   FlaggedResources: () => FlaggedResources({ ...ctx, onEdit: noop }),

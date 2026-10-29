@@ -49,7 +49,7 @@ const d = (x) => (x ? new Date(x).toISOString().slice(0, 10) : null);
 
 integrationRouter.get("/projects", async (_req, res, next) => {
   try {
-    const ps = await col("projects").find().sort({ name: 1 }).toArray();
+    const ps = await col("projects").find({ closedAt: null }).sort({ name: 1 }).toArray(); // closed projects aren't tracked
     res.json({ items: ps.map((p) => ({
       external_id: String(p._id),
       name: p.name,
@@ -65,9 +65,9 @@ integrationRouter.get("/projects", async (_req, res, next) => {
 
 integrationRouter.get("/milestones", async (_req, res, next) => {
   try {
-    const [ms, ps] = await Promise.all([col("milestones").find().toArray(), col("projects").find().toArray()]);
+    const [ms, ps] = await Promise.all([col("milestones").find().toArray(), col("projects").find({ closedAt: null }).toArray()]);
     const nameById = Object.fromEntries(ps.map((p) => [String(p._id), p.name]));
-    res.json({ items: ms.map((x) => ({
+    res.json({ items: ms.filter((x) => nameById[String(x.projectId)]).map((x) => ({
       external_id: String(x._id),
       project_name: nameById[String(x.projectId)] || null,
       name: x.name,
@@ -83,9 +83,9 @@ integrationRouter.get("/milestones", async (_req, res, next) => {
 
 integrationRouter.get("/raid", async (_req, res, next) => {
   try {
-    const [xs, ps] = await Promise.all([col("raid").find().toArray(), col("projects").find().toArray()]);
+    const [xs, ps] = await Promise.all([col("raid").find().toArray(), col("projects").find({ closedAt: null }).toArray()]);
     const nameById = Object.fromEntries(ps.map((p) => [String(p._id), p.name]));
-    res.json({ items: xs.map((x) => ({
+    res.json({ items: xs.filter((x) => nameById[String(x.projectId)]).map((x) => ({
       external_id: String(x._id),
       project_name: nameById[String(x.projectId)] || null,
       type: x.type,

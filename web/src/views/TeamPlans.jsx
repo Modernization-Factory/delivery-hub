@@ -18,11 +18,11 @@ export function TeamPlansView(ctx) {
   const [nform, setNform] = useState({ name: "", projectId: projects[0] ? projects[0].id : "", phase: "", startYm: todayISO.slice(0, 7), monthsCount: 6, mult: 20 });
   const [msg, setMsg] = useState(null);
   const r1 = (x) => Math.round(x * 10) / 10;
-  const projById = Object.fromEntries(projects.map((p) => [p.id, p]));
+  const projById = Object.fromEntries((ctx.allProjects || projects).map((p) => [p.id, p])); // existing plans may be on a closed project
   const mLab = (ym) => parseISO(ym + "-01").toLocaleDateString("en-IN", { month: "short", year: "2-digit" });
   const open = plans.find((p) => p.id === openId);
 
-  const effNfPid = projById[nform.projectId] ? nform.projectId : (projects[0] ? projects[0].id : "");
+  const effNfPid = projects.some((p) => p.id === nform.projectId) ? nform.projectId : (projects[0] ? projects[0].id : "");
   function createPlan() {
     setMsg(null);
     const proj = projById[effNfPid];

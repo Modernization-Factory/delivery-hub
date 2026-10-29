@@ -102,7 +102,7 @@ function LeaveSummary(ctx) {
           </select>
           <Btn kind="ghost" small onClick={() => {
             const pr = leaveByProjectRole(leaves, empByName, assignments, rangeStart, rangeEnd, leaveTypes, weekendDays, holidaySet);
-            const pName2 = (pid) => { const p = projects.find((x) => x.id === pid); return p ? p.name : pid; };
+            const pName2 = (pid) => { const p = (ctx.allProjects || projects).find((x) => x.id === pid); return p ? p.name : pid; };
             downloadXlsx("leave-report-" + (period === "all" ? "all" : period) + ".xlsx", [
               [(groupBy === "role" ? "By role" : "By company"), [[groupBy === "role" ? "Role" : "Company", "Active headcount", "On leave", ...leaveTypes.map((t) => t.name), "Total days", "Avg per person"], ...rows.map((r) => [r.key, r.hc, r.onLeave, ...leaveTypes.map((t) => r1(r.byType[t.name] || 0)), r1(r.total), r1(r.total / r.onLeave)])]],
               ["Project x Role", [["Project", "PM", "LD", "SD", "Dev", "Total"], ...Object.entries(pr.byProject).map(([pid, v]) => [pName2(pid), r1(v.PM), r1(v.LD), r1(v.SD), r1(v.Dev), r1(v.total)]), ["Unassigned", r1(pr.unassigned.PM), r1(pr.unassigned.LD), r1(pr.unassigned.SD), r1(pr.unassigned.Dev), r1(pr.unassigned.total)], ["All", r1(pr.totals.PM), r1(pr.totals.LD), r1(pr.totals.SD), r1(pr.totals.Dev), r1(pr.totals.total)]]],
@@ -162,7 +162,7 @@ function LeaveSummary(ctx) {
       </Card>
       {(() => {
         const pr = leaveByProjectRole(leaves, empByName, assignments, rangeStart, rangeEnd, leaveTypes, weekendDays, holidaySet);
-        const pName2 = (pid) => { const p = projects.find((x) => x.id === pid); return p ? p.name : pid; };
+        const pName2 = (pid) => { const p = (ctx.allProjects || projects).find((x) => x.id === pid); return p ? p.name : pid; };
         const prRows = Object.entries(pr.byProject).map(([pid, v]) => ({ label: pName2(pid), ...v }));
         if (pr.unassigned.total) prRows.push({ label: "Unassigned", ...pr.unassigned });
         return (

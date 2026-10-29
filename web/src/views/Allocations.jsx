@@ -24,7 +24,7 @@ export function AllocationsView(ctx) {
   const r1 = (x) => Math.round(x * 10) / 10;
   const months = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
   const mLabel = (m) => parseISO(year + "-" + String(m).padStart(2, "0") + "-01").toLocaleDateString("en-IN", { month: "short" });
-  const projById = Object.fromEntries(projects.map((p) => [p.id, p]));
+  const projById = Object.fromEntries((ctx.allProjects || projects).map((p) => [p.id, p])); // closed ones still name past assignments
   const pName = (a) => (projById[a.projectId] ? projById[a.projectId].name : "?");
   const label = (a) => pName(a) + (a.phase ? " · " + a.phase : "") + " · " + a.stream;
 
@@ -67,7 +67,7 @@ export function AllocationsView(ctx) {
 
   const selAssignments = sel ? assignments.filter((a) => a.name === sel).sort((a, b) => a.from.localeCompare(b.from)) : [];
   // self-healing project id: live databases use ObjectIds, so never trust a stale/hardcoded value
-  const effPid = projById[form.projectId] ? form.projectId : (projects[0] ? projects[0].id : "");
+  const effPid = projects.some((p) => p.id === form.projectId) ? form.projectId : (projects[0] ? projects[0].id : "");
   const selProj = projById[effPid];
 
   return (
@@ -328,7 +328,7 @@ export function AllocationsView(ctx) {
               </table>
             </div>
           </Card>
-          {projects.filter((p) => burn.perProj[p.id]).map((p) => (
+          {(ctx.allProjects || projects).filter((p) => burn.perProj[p.id]).map((p) => (
             <ProjectBurnCard key={p.id} project={p} perProj={burn.perProj[p.id]} rows={burn.rows} mLabel={mLabel} />
           ))}
           {Object.keys(burn.perProj).length === 0 && (
