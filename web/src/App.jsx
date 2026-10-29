@@ -1,10 +1,11 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { api, setIdentity, getIdentity } from "./api";
 import { LayoutDashboard, Plane, CalendarDays, ListChecks, BarChart3, Clock, Table, TrendingUp, GitBranch, FolderKanban, Gauge, Hourglass, Users, Settings as SettingsIcon, Shield, Lock, ExternalLink, ClipboardList, Activity } from "lucide-react";
-import { STREAMS, activeAssignmentsOn } from "./lib/allocations.js";
-import { MODULES_V2, SEED } from "./lib/constants.js";
+import { activeAssignmentsOn } from "./lib/allocations.js";
+import { MODULES_V2 } from "./lib/constants.js";
 import { toISO } from "./lib/dates.js";
 import { canDo, defaultPerms, mergePerms } from "./lib/permissions.js";
+import { PageLoading, useBackgroundRefresh } from "./ui/useBackgroundRefresh.jsx";
 import { Notice } from "./ui/atoms.jsx";
 import { BRAND_CSS, BRAND_FONT, Leaf } from "./ui/brand.jsx";
 import { AdminPanel } from "./views/Admin.jsx";
@@ -31,19 +32,11 @@ import { TimecardInsights } from "./views/TimecardInsights.jsx";
 // ROOT APP
 // ============================================================
 export default function App() {
-  // ---- normalize seed into stateful stores ----
-  const [employees, setEmployees0] = useState(() =>
-    SEED.E.map(([name, role, company, start, term], i) => ({ id: "e" + i, name, role, company, start, term }))
-  );
-  const [leaves, setLeaves0] = useState(() =>
-    SEED.L.map(([name, start, end, type], i) => ({ id: "l" + i, name, start, end, type }))
-  );
-  const [comps, setComps0] = useState(() =>
-    SEED.C.map(([name, date, days, reason], i) => ({ id: "c" + i, name, date, days, reason }))
-  );
-  const [tcRows, setTcRows0] = useState(() =>
-    SEED.T.map(([name, release, remarks, weeks], i) => ({ id: "t" + i, name, release, remarks, weeks: weeks.map((w) => [...w]) }))
-  );
+  // every dataset starts empty and is filled from the API (sign-in, then per page on first open)
+  const [employees, setEmployees0] = useState([]);
+  const [leaves, setLeaves0] = useState([]);
+  const [comps, setComps0] = useState([]);
+  const [tcRows, setTcRows0] = useState([]);
   const [leaveTypes, setLeaveTypes0] = useState([
     { name: "Vacation", value: 1 },
     { name: "Sick", value: 1 },
@@ -52,21 +45,29 @@ export default function App() {
     { name: "Comp-Off", value: 1 },
   ]);
   const [weekendDays, setWeekendDays0] = useState([0, 6]); // Sun, Sat
-  const [holidays, setHolidays0] = useState(SEED.H);
-  const [tcWeeks, setTcWeeks0] = useState(SEED.W);
-  const [projects, setProjects0] = useState([{ id: "p0", name: "OPUSM", phases: ["R1", "R2"], trackJira: true, streams: [...new Set([...STREAMS, "PM", "Refactoring"])], description: "", linkLabel: "", linkUrl: "" }]);
-  const [assignments, setAssignments0] = useState(() => {
-    const relOf = Object.fromEntries(SEED.E.map((e) => [e[0], e[5] || null]));
-    return (SEED.A || []).map(([name, stream, from, to], i) => ({ id: "a" + i, name, projectId: "p0", phase: relOf[name] || null, stream, from, to: to || null }));
-  });
+  const [holidays, setHolidays0] = useState([]);
+  const [tcWeeks, setTcWeeks0] = useState([]);
+  const [projects, setProjects0] = useState([]);
+  const [assignments, setAssignments0] = useState([]);
   const holidaySet = useMemo(() => new Set(holidays), [holidays]);
 
   // ======================= LIVE SYNC LAYER =======================
   const [booted, setBooted] = useState(false);
   const [syncErr, setSyncErr] = useState(null);
   const [srvMaps, setSrvMaps] = useState({ empIdByName: {}, tcDocIds: {} });
-  const fire = (p) => p.catch((e) => setSyncErr(e.message || String(e)));
+  // Saves in flight per dataset: a background refresh must not land mid-save and replace
+  // the user's edit with the server's older copy. The dataset is read from the API path.
+  const inFlight = useRef({});
+  const lastFetched = useRef({});
+  const DATASET_OF = { leaves: "leaves", compoffs: "comps", employees: "employees", projects: "projects", assignments: "assignments", scores: "scores", weeklyhealth: "weeklyHealth", pipeline: "pipeline", raid: "raid", milestones: "milestones", plans: "plans", timecards: "timecards", settings: "settings" };
+  const fire = (path, p) => {
+    const k = DATASET_OF[path.split("/")[1]];
+    if (k) inFlight.current[k] = (inFlight.current[k] || 0) + 1;
+    return p.catch((e) => setSyncErr(e.message || String(e))).finally(() => { if (k) inFlight.current[k]--; });
+  };
   const dstr = (x) => (x ? String(x).slice(0, 10) : null);
+  // a role without access gets a 403 — that's "nothing to show", not a failure
+  const noAccessIsEmpty = (e) => (e.status === 403 ? [] : Promise.reject(e));
 
   async function loadLeaves(empNameById) {
     const ls = await api("/leaves").catch((e) => (e.status === 403 ? api("/leaves?mine=1") : Promise.reject(e)));
@@ -110,23 +111,23 @@ export default function App() {
     setScores0(ss.map((s) => ({ id: String(s._id), name: empNameById[String(s.employeeId)], week: dstr(s.week), m: s.m })).filter((s) => s.name));
   }
   async function loadRaid() {
-    const xs = await api("/raid").catch(() => []);
+    const xs = await api("/raid").catch(noAccessIsEmpty);
     setRaid0(xs.map((x) => ({ id: String(x.id), projectId: String(x.projectId), type: x.type, desc: x.desc, impact: x.impact, probability: x.probability, owner: x.owner || "", targetDate: dstr(x.targetDate) || "", status: x.status, link: x.link || "", comments: x.comments || "", createdBy: x.createdBy, createdAt: dstr(x.createdAt), updatedAt: dstr(x.updatedAt) })));
   }
   async function loadMilestones() {
-    const xs = await api("/milestones").catch(() => []);
+    const xs = await api("/milestones").catch(noAccessIsEmpty);
     setMilestones0(xs.map((x) => ({ id: String(x.id), projectId: String(x.projectId), name: x.name, phase: x.phase || "", planned: dstr(x.planned) || "", actual: dstr(x.actual) || "", status: x.status, rag: x.rag, comments: x.comments || "", createdBy: x.createdBy, createdAt: dstr(x.createdAt), updatedAt: dstr(x.updatedAt) })));
   }
   async function loadWeeklyHealth() {
-    const xs = await api("/weeklyhealth").catch(() => []);
+    const xs = await api("/weeklyhealth").catch(noAccessIsEmpty);
     setWeeklyHealth0(xs.map((x) => ({ id: String(x.id), projectId: String(x.projectId), week: dstr(x.week), hoursPlanned: x.hoursPlanned, hoursBurnt: x.hoursBurnt, scopeChanges: !!x.scopeChanges, rag: x.rag, oneLiner: x.oneLiner || "", createdBy: x.createdBy, updatedAt: dstr(x.updatedAt) })));
   }
   async function loadPipeline() {
-    const xs = await api("/pipeline").catch(() => []);
+    const xs = await api("/pipeline").catch(noAccessIsEmpty);
     setPipeline0(xs.map((x) => ({ id: String(x.id), company: x.company, stage: x.stage, potentialStart: x.potentialStart || "", potentialResources: x.potentialResources ?? null, commentary: x.commentary || "", nextAction: x.nextAction || "" })));
   }
   async function loadPlans() {
-    const ps = await api("/plans").catch(() => []);
+    const ps = await api("/plans").catch(noAccessIsEmpty);
     setPlans0(ps.map((p) => ({ id: String(p.id), name: p.name, projectId: String(p.projectId), phase: p.phase || null, startYm: p.startYm, monthsCount: p.monthsCount, mult: p.mult, multOverrides: p.multOverrides || {}, rows: p.rows || [], archived: !!p.archived, createdBy: p.createdBy, createdAt: dstr(p.createdAt), updatedAt: dstr(p.updatedAt) })));
   }
   async function loadSettings() {
@@ -138,33 +139,39 @@ export default function App() {
     if (s.extLinks) setExtLinks0(s.extLinks.map((l, i) => ({ id: l.id || "x" + i, label: l.label, url: l.url, description: l.description || "" })));
     if (s.empFields) setEmpFields0(s.empFields);
   }
-  async function loadAll(role) {
+  // returns { id: name } for the person-keyed loaders that follow it
+  async function loadEmployees() {
     const es = await api("/employees").catch(() => null);
-    let empNameById = {};
-    if (es) {
-      setEmployees0(es.map((e) => ({ id: String(e.id), name: e.name, email: e.email || "", role: e.role, company: e.company, start: e.start, term: e.term, streamLead: !!e.streamLead, viewer: !!e.viewer, isAdmin: !!e.isAdmin, inactive: !!e.inactive, custom: e.custom || {} })));
-      empNameById = Object.fromEntries(es.map((e) => [String(e.id), e.name]));
-      setSrvMaps((m) => ({ ...m, empIdByName: Object.fromEntries(es.map((e) => [e.name, String(e.id)])) }));
-    }
-    await loadSettings();
-    await Promise.all([
-      loadLeaves(empNameById).catch(() => {}),
-      loadComps(empNameById).catch(() => {}),
-      loadTimecards(empNameById).catch(() => {}),
-      loadProjects().catch(() => {}),
-      loadAssignments(empNameById).catch(() => {}),
-      loadScores(empNameById).catch(() => {}),
-      loadPlans().catch(() => {}),
-      loadRaid().catch(() => {}),
-      loadMilestones().catch(() => {}),
-      loadWeeklyHealth().catch(() => {}),
-      loadPipeline().catch(() => {}),
-    ]);
+    if (!es) return empNameByIdNow();
+    setEmployees0(es.map((e) => ({ id: String(e.id), name: e.name, email: e.email || "", role: e.role, company: e.company, start: e.start, term: e.term, streamLead: !!e.streamLead, viewer: !!e.viewer, isAdmin: !!e.isAdmin, inactive: !!e.inactive, custom: e.custom || {} })));
+    setSrvMaps((m) => ({ ...m, empIdByName: Object.fromEntries(es.map((e) => [e.name, String(e.id)])) }));
+    return Object.fromEntries(es.map((e) => [String(e.id), e.name]));
+  }
+  // Sign-in loads only what every page needs; each page loads its own data the first
+  // time it opens (useBackgroundRefresh), so first load no longer pulls every module.
+  async function loadAll(role, myCaps) {
+    // non-Admins: their own column of the saved matrix, from /me
+    if (myCaps) setPerms0((p) => Object.fromEntries(Object.keys({ ...p, ...myCaps }).map((cap) => [cap, { ...(p[cap] || {}), [role]: !!myCaps[cap] }])));
+    await loadEmployees();
+    await loadSettings().catch(() => {});
     if (role === "Admin") {
       const p = await api("/admin/permissions").catch(() => null);
       if (p && p.perms) setPerms0(mergePerms(p.perms));
     }
+    const now = Date.now();
+    lastFetched.current = { employees: now, settings: now }; // everything else loads on demand
     setBooted(true);
+  }
+  // dataset -> loader; person-keyed loaders resolve employee ids through `names`
+  const loadersFor = (names) => ({ leaves: () => loadLeaves(names), comps: () => loadComps(names), timecards: () => loadTimecards(names), projects: loadProjects, assignments: () => loadAssignments(names), scores: () => loadScores(names), plans: loadPlans, raid: loadRaid, milestones: loadMilestones, weeklyHealth: loadWeeklyHealth, pipeline: loadPipeline, settings: loadSettings });
+  // Re-pull everything this session has already loaded (after a sync error, a new employee,
+  // or an import that added people) — not the modules the user never opened.
+  async function reloadLoaded() {
+    const names = await loadEmployees();
+    const LOAD = loadersFor(names);
+    const now = Date.now();
+    await Promise.all(Object.keys(lastFetched.current).filter((k) => LOAD[k]).map((k) => LOAD[k]().then(() => (lastFetched.current[k] = now)).catch(() => {})));
+    lastFetched.current.employees = now;
   }
   const empNameByIdNow = () => Object.fromEntries(Object.entries(srvMaps.empIdByName).map(([n, i]) => [i, n]));
 
@@ -180,15 +187,15 @@ export default function App() {
   const setLeaves = (next) => {
     const prev = leaves; setLeaves0(next);
     diffSync(prev, next, {
-      create: (l) => fire(api("/leaves", { method: "POST", body: { employeeId: eid(l.name), start: l.start, end: l.end, type: l.type, force: true } }).then(() => loadLeaves(empNameByIdNow()))),
-      remove: (l) => fire(api("/leaves/" + l.id, { method: "DELETE" })),
+      create: (l) => fire("/leaves", api("/leaves", { method: "POST", body: { employeeId: eid(l.name), start: l.start, end: l.end, type: l.type, force: true } }).then(() => loadLeaves(empNameByIdNow()))),
+      remove: (l) => fire("/leaves", api("/leaves/" + l.id, { method: "DELETE" })),
     });
   };
   const setComps = (next) => {
     const prev = comps; setComps0(next);
     diffSync(prev, next, {
-      create: (c) => fire(api("/compoffs", { method: "POST", body: { employeeId: eid(c.name), dateWorked: c.date, days: c.days, reason: c.reason } }).then(() => loadComps(empNameByIdNow()))),
-      remove: (c) => fire(api("/compoffs/" + c.id, { method: "DELETE" })),
+      create: (c) => fire("/compoffs", api("/compoffs", { method: "POST", body: { employeeId: eid(c.name), dateWorked: c.date, days: c.days, reason: c.reason } }).then(() => loadComps(empNameByIdNow()))),
+      remove: (c) => fire("/compoffs", api("/compoffs/" + c.id, { method: "DELETE" })),
     });
   };
   const setEmployees = (next0) => {
@@ -196,8 +203,8 @@ export default function App() {
     const next = [...next0, ...employees.filter((e) => e.inactive && !next0.some((x) => x.id === e.id))];
     const prev = employees; setEmployees0(next);
     diffSync(prev, next, {
-      create: (e) => fire(api("/employees", { method: "POST", body: { name: e.name, email: e.email || null, role: e.role, company: e.company, start: e.start, term: e.term, streamLead: !!e.streamLead, viewer: !!e.viewer, inactive: !!e.inactive, custom: e.custom || {} } }).then(() => loadAll(user ? user.role : null))),
-      update: (e) => fire(api("/employees/" + e.id, { method: "PUT", body: { name: e.name, email: e.email || null, role: e.role, company: e.company, start: e.start, term: e.term, streamLead: !!e.streamLead, viewer: !!e.viewer, inactive: !!e.inactive, custom: e.custom || {} } })),
+      create: (e) => fire("/employees", api("/employees", { method: "POST", body: { name: e.name, email: e.email || null, role: e.role, company: e.company, start: e.start, term: e.term, streamLead: !!e.streamLead, viewer: !!e.viewer, inactive: !!e.inactive, custom: e.custom || {} } }).then(reloadLoaded)),
+      update: (e) => fire("/employees", api("/employees/" + e.id, { method: "PUT", body: { name: e.name, email: e.email || null, role: e.role, company: e.company, start: e.start, term: e.term, streamLead: !!e.streamLead, viewer: !!e.viewer, inactive: !!e.inactive, custom: e.custom || {} } })),
     });
   };
   // Admin grants go through their own endpoint (not PUT /employees), so update local state directly.
@@ -216,8 +223,8 @@ export default function App() {
     const next = [...next0, ...projects.filter((p) => p.closedAt && !next0.some((x) => x.id === p.id))];
     const prev = projects; setProjects0(next);
     diffSync(prev, next, {
-      create: (p) => fire(api("/projects", { method: "POST", body: { name: p.name, phases: p.phases, streams: p.streams || [], description: p.description || "", linkLabel: p.linkLabel || "", linkUrl: p.linkUrl || "", start: p.start || null, end: p.end || null, targetMargin: p.targetMargin ?? null, pm: p.pm || null, currentPhase: p.currentPhase || null, trackJira: p.trackJira !== false } }).then(loadProjects)),
-      remove: (p) => fire(api("/projects/" + p.id, { method: "DELETE" })),
+      create: (p) => fire("/projects", api("/projects", { method: "POST", body: { name: p.name, phases: p.phases, streams: p.streams || [], description: p.description || "", linkLabel: p.linkLabel || "", linkUrl: p.linkUrl || "", start: p.start || null, end: p.end || null, targetMargin: p.targetMargin ?? null, pm: p.pm || null, currentPhase: p.currentPhase || null, trackJira: p.trackJira !== false } }).then(loadProjects)),
+      remove: (p) => fire("/projects", api("/projects/" + p.id, { method: "DELETE" })),
       update: (p, was) => {
         const body = {};
         const catChange = p.name !== was.name || JSON.stringify(p.phases) !== JSON.stringify(was.phases) || p.trackJira !== was.trackJira ||
@@ -225,63 +232,63 @@ export default function App() {
         if (catChange) Object.assign(body, { name: p.name, phases: p.phases, streams: p.streams || [], description: p.description || "", linkLabel: p.linkLabel || "", linkUrl: p.linkUrl || "", start: p.start || null, end: p.end || null, targetMargin: p.targetMargin ?? null, pm: p.pm || null, currentPhase: p.currentPhase || null, trackJira: p.trackJira !== false });
         if (JSON.stringify(p.funding) !== JSON.stringify(was.funding)) body.funding = p.funding;
         if (p.totalStories !== was.totalStories || p.doneStories !== was.doneStories || p.currentMargin !== was.currentMargin || p.keyUpdate !== was.keyUpdate) Object.assign(body, { totalStories: p.totalStories, doneStories: p.doneStories, currentMargin: p.currentMargin, keyUpdate: p.keyUpdate });
-        if (Object.keys(body).length) fire(api("/projects/" + p.id, { method: "PUT", body }));
+        if (Object.keys(body).length) fire("/projects", api("/projects/" + p.id, { method: "PUT", body }));
       },
     });
   };
   const setAssignments = (next) => {
     const prev = assignments; setAssignments0(next);
     diffSync(prev, next, {
-      create: (a) => fire(api("/assignments", { method: "POST", body: { employeeId: eid(a.name), projectId: a.projectId, phase: a.phase, stream: a.stream, from: a.from, to: a.to, weeklyHours: a.weeklyHours || 40 } }).then(() => loadAssignments(empNameByIdNow()))),
-      remove: (a) => fire(api("/assignments/" + a.id, { method: "DELETE" })),
-      update: (a, was) => { if (a.to !== was.to) fire(api("/assignments/" + a.id + "/end", { method: "PATCH", body: { to: a.to } })); },
+      create: (a) => fire("/assignments", api("/assignments", { method: "POST", body: { employeeId: eid(a.name), projectId: a.projectId, phase: a.phase, stream: a.stream, from: a.from, to: a.to, weeklyHours: a.weeklyHours || 40 } }).then(() => loadAssignments(empNameByIdNow()))),
+      remove: (a) => fire("/assignments", api("/assignments/" + a.id, { method: "DELETE" })),
+      update: (a, was) => { if (a.to !== was.to) fire("/assignments", api("/assignments/" + a.id + "/end", { method: "PATCH", body: { to: a.to } })); },
     });
   };
   const setScores = (next) => {
     const prev = scores; setScores0(next);
     diffSync(prev, next, {
-      create: (s) => fire(api("/scores", { method: "PUT", body: { employeeId: eid(s.name), week: s.week, m: s.m } })),
-      update: (s) => fire(api("/scores", { method: "PUT", body: { employeeId: eid(s.name), week: s.week, m: s.m } })),
+      create: (s) => fire("/scores", api("/scores", { method: "PUT", body: { employeeId: eid(s.name), week: s.week, m: s.m } })),
+      update: (s) => fire("/scores", api("/scores", { method: "PUT", body: { employeeId: eid(s.name), week: s.week, m: s.m } })),
     });
   };
   const setWeeklyHealth = (next) => {
     const prev = weeklyHealth; setWeeklyHealth0(next);
     diffSync(prev, next, {
-      create: (w) => fire(api("/weeklyhealth", { method: "POST", body: { projectId: w.projectId, week: w.week, hoursPlanned: w.hoursPlanned, hoursBurnt: w.hoursBurnt, scopeChanges: w.scopeChanges, rag: w.rag, oneLiner: w.oneLiner } }).then(loadWeeklyHealth)),
-      remove: (w) => fire(api("/weeklyhealth/" + w.id, { method: "DELETE" })),
-      update: (w) => fire(api("/weeklyhealth/" + w.id, { method: "PUT", body: { week: w.week, hoursPlanned: w.hoursPlanned, hoursBurnt: w.hoursBurnt, scopeChanges: w.scopeChanges, rag: w.rag, oneLiner: w.oneLiner } })),
+      create: (w) => fire("/weeklyhealth", api("/weeklyhealth", { method: "POST", body: { projectId: w.projectId, week: w.week, hoursPlanned: w.hoursPlanned, hoursBurnt: w.hoursBurnt, scopeChanges: w.scopeChanges, rag: w.rag, oneLiner: w.oneLiner } }).then(loadWeeklyHealth)),
+      remove: (w) => fire("/weeklyhealth", api("/weeklyhealth/" + w.id, { method: "DELETE" })),
+      update: (w) => fire("/weeklyhealth", api("/weeklyhealth/" + w.id, { method: "PUT", body: { week: w.week, hoursPlanned: w.hoursPlanned, hoursBurnt: w.hoursBurnt, scopeChanges: w.scopeChanges, rag: w.rag, oneLiner: w.oneLiner } })),
     });
   };
   const setPipeline = (next) => {
     const prev = pipeline; setPipeline0(next);
     diffSync(prev, next, {
-      create: (x) => fire(api("/pipeline", { method: "POST", body: { company: x.company, stage: x.stage, potentialStart: x.potentialStart, potentialResources: x.potentialResources, commentary: x.commentary, nextAction: x.nextAction } }).then(loadPipeline)),
-      remove: (x) => fire(api("/pipeline/" + x.id, { method: "DELETE" })),
-      update: (x) => fire(api("/pipeline/" + x.id, { method: "PUT", body: { company: x.company, stage: x.stage, potentialStart: x.potentialStart, potentialResources: x.potentialResources, commentary: x.commentary, nextAction: x.nextAction } })),
+      create: (x) => fire("/pipeline", api("/pipeline", { method: "POST", body: { company: x.company, stage: x.stage, potentialStart: x.potentialStart, potentialResources: x.potentialResources, commentary: x.commentary, nextAction: x.nextAction } }).then(loadPipeline)),
+      remove: (x) => fire("/pipeline", api("/pipeline/" + x.id, { method: "DELETE" })),
+      update: (x) => fire("/pipeline", api("/pipeline/" + x.id, { method: "PUT", body: { company: x.company, stage: x.stage, potentialStart: x.potentialStart, potentialResources: x.potentialResources, commentary: x.commentary, nextAction: x.nextAction } })),
     });
   };
   const setRaid = (next) => {
     const prev = raid; setRaid0(next);
     diffSync(prev, next, {
-      create: (x) => fire(api("/raid", { method: "POST", body: { projectId: x.projectId, type: x.type, desc: x.desc, impact: x.impact, probability: x.probability, owner: x.owner, targetDate: x.targetDate || null, status: x.status, link: x.link, comments: x.comments } }).then(loadRaid)),
-      remove: (x) => fire(api("/raid/" + x.id, { method: "DELETE" })),
-      update: (x) => fire(api("/raid/" + x.id, { method: "PUT", body: { type: x.type, desc: x.desc, impact: x.impact, probability: x.probability, owner: x.owner, targetDate: x.targetDate || null, status: x.status, link: x.link, comments: x.comments } })),
+      create: (x) => fire("/raid", api("/raid", { method: "POST", body: { projectId: x.projectId, type: x.type, desc: x.desc, impact: x.impact, probability: x.probability, owner: x.owner, targetDate: x.targetDate || null, status: x.status, link: x.link, comments: x.comments } }).then(loadRaid)),
+      remove: (x) => fire("/raid", api("/raid/" + x.id, { method: "DELETE" })),
+      update: (x) => fire("/raid", api("/raid/" + x.id, { method: "PUT", body: { type: x.type, desc: x.desc, impact: x.impact, probability: x.probability, owner: x.owner, targetDate: x.targetDate || null, status: x.status, link: x.link, comments: x.comments } })),
     });
   };
   const setMilestones = (next) => {
     const prev = milestones; setMilestones0(next);
     diffSync(prev, next, {
-      create: (x) => fire(api("/milestones", { method: "POST", body: { projectId: x.projectId, name: x.name, phase: x.phase, planned: x.planned || null, actual: x.actual || null, status: x.status, rag: x.rag, comments: x.comments } }).then(loadMilestones)),
-      remove: (x) => fire(api("/milestones/" + x.id, { method: "DELETE" })),
-      update: (x) => fire(api("/milestones/" + x.id, { method: "PUT", body: { name: x.name, phase: x.phase, planned: x.planned || null, actual: x.actual || null, status: x.status, rag: x.rag, comments: x.comments } })),
+      create: (x) => fire("/milestones", api("/milestones", { method: "POST", body: { projectId: x.projectId, name: x.name, phase: x.phase, planned: x.planned || null, actual: x.actual || null, status: x.status, rag: x.rag, comments: x.comments } }).then(loadMilestones)),
+      remove: (x) => fire("/milestones", api("/milestones/" + x.id, { method: "DELETE" })),
+      update: (x) => fire("/milestones", api("/milestones/" + x.id, { method: "PUT", body: { name: x.name, phase: x.phase, planned: x.planned || null, actual: x.actual || null, status: x.status, rag: x.rag, comments: x.comments } })),
     });
   };
   const setPlans = (next) => {
     const prev = plans; setPlans0(next);
     diffSync(prev, next, {
-      create: (p) => fire(api("/plans", { method: "POST", body: { name: p.name, projectId: p.projectId, phase: p.phase, startYm: p.startYm, monthsCount: p.monthsCount, mult: p.mult, multOverrides: p.multOverrides, rows: p.rows } }).then(loadPlans)),
-      remove: (p) => fire(api("/plans/" + p.id, { method: "DELETE" })),
-      update: (p) => fire(api("/plans/" + p.id, { method: "PUT", body: { name: p.name, phase: p.phase, startYm: p.startYm, monthsCount: p.monthsCount, mult: p.mult, multOverrides: p.multOverrides, rows: p.rows, archived: p.archived } })),
+      create: (p) => fire("/plans", api("/plans", { method: "POST", body: { name: p.name, projectId: p.projectId, phase: p.phase, startYm: p.startYm, monthsCount: p.monthsCount, mult: p.mult, multOverrides: p.multOverrides, rows: p.rows } }).then(loadPlans)),
+      remove: (p) => fire("/plans", api("/plans/" + p.id, { method: "DELETE" })),
+      update: (p) => fire("/plans", api("/plans/" + p.id, { method: "PUT", body: { name: p.name, phase: p.phase, startYm: p.startYm, monthsCount: p.monthsCount, mult: p.mult, multOverrides: p.multOverrides, rows: p.rows, archived: p.archived } })),
     });
   };
   const setTcRows = (next0) => {
@@ -296,7 +303,7 @@ export default function App() {
         const old = was.weeks[i] || ["", ""];
         if (w[0] !== old[0] || w[1] !== old[1]) {
           const docId = srvMaps.tcDocIds[r.id] && srvMaps.tcDocIds[r.id][tcWeeks[i]];
-          if (docId) fire(api("/timecards/" + docId, { method: "PUT", body: { sf: w[0] || null, jira: w[1] || null } }));
+          if (docId) fire("/timecards", api("/timecards/" + docId, { method: "PUT", body: { sf: w[0] || null, jira: w[1] || null } }));
         }
       });
     });
@@ -304,18 +311,18 @@ export default function App() {
   const setTcWeeks = (next) => {
     const prev = tcWeeks; setTcWeeks0(next);
     if (next.length === prev.length + 1) {
-      fire(api("/timecards/weeks", { method: "POST" }).then(() => loadTimecards(empNameByIdNow())));
+      fire("/timecards", api("/timecards/weeks", { method: "POST" }).then(() => loadTimecards(empNameByIdNow())));
     }
   };
   const pushSettings = (lt, wd, hd) =>
-    fire(api("/settings", { method: "PUT", body: { leaveTypes: lt, weekendDays: wd, holidays: hd } }));
+    fire("/settings", api("/settings", { method: "PUT", body: { leaveTypes: lt, weekendDays: wd, holidays: hd } }));
   const setLeaveTypes = (next) => { setLeaveTypes0(next); pushSettings(next, weekendDays, holidays); };
   const setWeekendDays = (next) => { setWeekendDays0(next); pushSettings(leaveTypes, next, holidays); };
   const setHolidays = (next) => { setHolidays0(next); pushSettings(leaveTypes, weekendDays, next); };
-  const setExtLinks = (next) => { setExtLinks0(next); fire(api("/settings", { method: "PUT", body: { extLinks: next } })); };
-  const setEmpFields = (next) => { setEmpFields0(next); fire(api("/settings", { method: "PUT", body: { empFields: next } })); };
-  const setPerfCfg = (next) => { setPerfCfg0(next); fire(api("/perf/config", { method: "PUT", body: next })); };
-  const setPerms = (next) => { setPerms0(next); fire(api("/admin/permissions", { method: "PUT", body: { perms: next } })); };
+  const setExtLinks = (next) => { setExtLinks0(next); fire("/settings", api("/settings", { method: "PUT", body: { extLinks: next } })); };
+  const setEmpFields = (next) => { setEmpFields0(next); fire("/settings", api("/settings", { method: "PUT", body: { empFields: next } })); };
+  const setPerfCfg = (next) => { setPerfCfg0(next); fire("/perf", api("/perf/config", { method: "PUT", body: next })); };
+  const setPerms = (next) => { setPerms0(next); fire("/admin", api("/admin/permissions", { method: "PUT", body: { perms: next } })); };
   // flag / unflag one person-week as an outlier, with an optional comment
   async function setTcFlag(rowId, weekIdx, flag) {
     const docId = srvMaps.tcDocIds[rowId] && srvMaps.tcDocIds[rowId][tcWeeks[weekIdx]];
@@ -334,7 +341,7 @@ export default function App() {
     fd.append("file", file);
     const r = await api("/timecards/import", { method: "POST", formData: fd });
     await loadTimecards(empNameByIdNow());
-    if (r.unknownNames && r.unknownNames.length) await loadAll(user ? user.role : null);
+    if (r.unknownNames && r.unknownNames.length) await reloadLoaded();
     return r;
   }
   // ===================== END LIVE SYNC LAYER =====================
@@ -349,6 +356,8 @@ export default function App() {
   useEffect(() => {
     if (NAV_DEEPLINK.includes(nav) && window.location.hash.slice(1) !== nav) window.history.replaceState(null, "", "#" + nav);
   }, [nav]); // eslint-disable-line react-hooks/exhaustive-deps
+  // background refresh of the current page's data (other people's changes, without a reload)
+  const pageData = useBackgroundRefresh(nav, booted, { lastFetched, inFlight, loadEmployees, empNameByIdNow, loaders: loadersFor });
   const [idc, setIdc] = useState(1000);
   const nextId = (p) => { setIdc(idc + 1); return p + (idc + 1); };
 
@@ -372,7 +381,7 @@ export default function App() {
     });
     return out;
   }, [tcRows, tcWeeks, assignments, projects]);
-  const [scores, setScores0] = useState(() => (SEED.P || []).map(([name, week, m], i) => ({ id: "s" + i, name, week, m: [...m] })));
+  const [scores, setScores0] = useState([]);
   const [perfCfg, setPerfCfg0] = useState({ weights: [25, 20, 10, 25, 10, 10], green: 3.5, amber: 2.5, partnerOnly: true });
   const [perms, setPerms0] = useState(defaultPerms);
   const [extLinks, setExtLinks0] = useState([]); // admin-managed external app links shown in the sidebar
@@ -392,7 +401,7 @@ export default function App() {
       .then((me) => {
         // A saved address that isn't the authenticated (Okta) identity goes back to login.
         if (me.email && me.email !== getIdentity()) throw new Error("identity_mismatch");
-        setUser({ role: me.role, name: me.employee.name }); loadAll(me.role);
+        setUser({ role: me.role, name: me.employee.name }); loadAll(me.role, me.can);
       })
       .catch(() => setIdentity(null))
       .finally(() => setRestoring(false));
@@ -416,7 +425,7 @@ export default function App() {
           }
           setUser({ role: me.role, name: me.employee.name });
           setNav("dash");
-          loadAll(me.role);
+          loadAll(me.role, me.can);
         }}
       />
     );
@@ -496,7 +505,7 @@ export default function App() {
 
       {syncErr && (
         <div className="mx-auto max-w-[1720px] px-4 pt-3">
-          <Notice tone="error">Sync issue: {syncErr} — your last change may not be saved. <button className="ml-2 underline" onClick={() => { setSyncErr(null); loadAll(user.role); }}>Reload from server</button></Notice>
+          <Notice tone="error">Sync issue: {syncErr} — your last change may not be saved. <button className="ml-2 underline" onClick={() => { setSyncErr(null); reloadLoaded(); }}>Reload from server</button></Notice>
         </div>
       )}
       <div className="mx-auto flex max-w-[1720px] gap-6 px-4 py-6">
@@ -554,6 +563,8 @@ export default function App() {
 
         {/* main */}
         <main className="min-w-0 flex-1">
+          {!pageData.ready && <PageLoading {...pageData} />}
+          {pageData.ready && <>
           {nav === "dash" && <Dashboard {...ctx} />}
           {nav === "myleave" && <MyLeave {...ctx} />}
           {nav === "calendar" && <TeamCalendar {...ctx} />}
@@ -572,6 +583,7 @@ export default function App() {
           {nav === "settings" && can("settings.edit") && <SettingsView {...ctx} />}
           {nav === "admin" && isAdmin && <AdminPanel {...ctx} />}
           {nav.startsWith("v2:") && <ComingSoon id={nav.slice(3)} role={user.role} />}
+          </>}
         </main>
       </div>
     </div>

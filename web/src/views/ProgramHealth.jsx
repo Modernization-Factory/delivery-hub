@@ -103,7 +103,13 @@ export function ProgramHealthView(ctx) {
       {msg && <Notice tone={msg.tone === "error" ? "error" : "ok"}>{msg.text}</Notice>}
 
       {tab === "portfolio" && sel && (
-        <ProjectHealthDetail row={sel} onBack={() => setSelId(null)} marginsVisible={marginsVisible} todayISO={todayISO} raid={raid} />
+        <ProjectHealthDetail row={sel} onBack={() => setSelId(null)} marginsVisible={marginsVisible} todayISO={todayISO} raid={raid}
+          canRegister={canRegister} canTarget={ctx.can("projects.manage")}
+          onSave={(vals) => {
+            const p = sel.p;
+            setProjects(projects.map((x) => (x.id === p.id ? { ...x, ...vals } : x)));
+            setMsg({ tone: "ok", text: p.name + " updated." });
+          }} />
       )}
 
       {tab === "portfolio" && !sel && (
@@ -117,7 +123,7 @@ export function ProgramHealthView(ctx) {
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-xs text-slate-500">Status uses the latest weekly RAG when a PM has submitted one, otherwise it is derived from burn, schedule, risks and milestones. Click a tile for the project detail.</p>
+          <p className="text-xs text-slate-500">Status uses the latest weekly RAG when a PM has submitted one, otherwise it is derived from burn, schedule, risks and milestones. Click a tile for the project detail{canRegister || ctx.can("projects.manage") ? " — use \"Update project data\" there to change stories, margins and the key update" : ""}.</p>
           <div className="flex gap-1 rounded-lg border border-slate-200 bg-white p-1">
             {[["tiles", "Tiles"], ["table", "Table"]].map(([v, lab]) => (
               <button key={v} onClick={() => setPortView(v)} className={"rounded-md px-3 py-1 text-sm " + (portView === v ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-50")}>{lab}</button>
@@ -412,7 +418,7 @@ export function ProgramHealthView(ctx) {
 // PROGRAM HEALTH — single project detail (KPIs behind a dashboard tile)
 // Read-only: every number is derived from the same facts as the portfolio.
 // ============================================================
-export function ProjectHealthDetail({ row, onBack, marginsVisible, todayISO, raid }) {
+export function ProjectHealthDetail({ row, onBack, marginsVisible, todayISO, raid, canRegister, canTarget, onSave }) {
   const { p, entries, el, sv, bv, lw, hr, ms, nextMs, overdue, st } = row;
   const pc = phPct;
   const plannedH = entries.reduce((s, e) => s + (Number(e.hoursPlanned) || 0), 0);
@@ -422,6 +428,7 @@ export function ProjectHealthDetail({ row, onBack, marginsVisible, todayISO, rai
   const projRaid = raid.filter((x) => x.projectId === p.id && x.status !== "Closed")
     .sort((a, b) => (a.impact === b.impact ? ((a.targetDate || "9999") < (b.targetDate || "9999") ? -1 : 1) : a.impact === "H" ? -1 : 1));
   const marginVar = p.targetMargin != null && p.currentMargin != null ? Math.round((p.currentMargin - p.targetMargin) * 10) / 10 : null;
+  const canUpdate = !!onSave && (canRegister || canTarget);
 
   return (
     <div className="space-y-4">
@@ -432,6 +439,7 @@ export function ProjectHealthDetail({ row, onBack, marginsVisible, todayISO, rai
         <span className="text-xs text-slate-500">
           {st.fromPM ? "PM-submitted RAG" + (lw ? " · week ending " + fmt(lw.week) : "") : "derived — no weekly entry submitted"}
         </span>
+        {canUpdate && <span className="ml-auto"><UpdateProjectData key={p.id} p={p} canRegister={canRegister} canTarget={canTarget} marginsVisible={marginsVisible} onSave={onSave} /></span>}
       </div>
 
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-600">
@@ -540,6 +548,59 @@ export function ProjectHealthDetail({ row, onBack, marginsVisible, todayISO, rai
               ))}
             </ul>
           )}
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+// One place to update what drives a project's health: stories (→ task completion %), current
+// and target margin, and the key update. Fields follow permissions: register fields need
+// ph.register, target margin needs projects.manage; margins only show to PM / Admin.
+function UpdateProjectData({ p, canRegister, canTarget, marginsVisible, onSave }) {
+  const init = () => ({ totalStories: p.totalStories ?? "", doneStories: p.doneStories ?? "", currentMargin: p.currentMargin ?? "", targetMargin: p.targetMargin ?? "", keyUpdate: p.keyUpdate || "" });
+  const [f, setF] = useState(null);
+  const [err, setErr] = useState(null);
+  const num = (v) => (v === "" || v === null ? null : Number(v));
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  if (!f) return <Btn small onClick={() => { setF(init()); setErr(null); }}>Update project data</Btn>;
+  const t = num(f.totalStories), dn = num(f.doneStories);
+  const pct = t ? Math.round(((dn || 0) / t) * 100) : null;
+  function save() {
+    if ([t, dn].some((x) => x !== null && (Number.isNaN(x) || x < 0))) return setErr("Story counts can't be negative.");
+    if ([num(f.currentMargin), num(f.targetMargin)].some((x) => x !== null && Number.isNaN(x))) return setErr("Margins must be numbers."); // a margin can be negative (loss-making)
+    if (t !== null && dn !== null && dn > t) return setErr("Completed stories can't be more than the total.");
+    const vals = {};
+    if (canRegister) Object.assign(vals, { totalStories: t, doneStories: dn, keyUpdate: f.keyUpdate.trim(), ...(marginsVisible ? { currentMargin: num(f.currentMargin) } : {}) });
+    if (canTarget && marginsVisible) vals.targetMargin = num(f.targetMargin);
+    onSave(vals);
+    setF(null);
+  }
+  return (
+    <div className="fixed inset-0 z-40 flex items-start justify-center bg-slate-900/30 p-6" onClick={() => setF(null)}>
+      <div className="mt-16 w-full max-w-xl" onClick={(e) => e.stopPropagation()}>
+        <Card title={"Update " + p.name}>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Field label="Completed stories"><input type="number" min="0" className={inputCls} disabled={!canRegister} value={f.doneStories} onChange={set("doneStories")} /></Field>
+            <Field label="Total stories"><input type="number" min="0" className={inputCls} disabled={!canRegister} value={f.totalStories} onChange={set("totalStories")} /></Field>
+            <Field label="Task completion">
+              <div className="rounded-lg bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-800">{pct === null ? "—" : pct + "%"}<span className="ml-1 text-xs font-normal text-slate-400">calculated</span></div>
+            </Field>
+            {marginsVisible && (
+              <>
+                <Field label="Current margin %"><input type="number" max="100" step="0.1" className={inputCls} disabled={!canRegister} value={f.currentMargin} onChange={set("currentMargin")} /></Field>
+                <Field label="Target margin %"><input type="number" max="100" step="0.1" className={inputCls} disabled={!canTarget} value={f.targetMargin} onChange={set("targetMargin")} title={canTarget ? "" : "Needs Manage projects permission"} /></Field>
+                <div />
+              </>
+            )}
+          </div>
+          <div className="mt-3"><Field label="Key update"><input className={inputCls} disabled={!canRegister} value={f.keyUpdate} onChange={set("keyUpdate")} placeholder="One line on where the project stands" /></Field></div>
+          {err && <div className="mt-2"><Notice tone="error">{err}</Notice></div>}
+          {(!canRegister || (marginsVisible && !canTarget)) && <p className="mt-2 text-xs text-slate-400">Greyed-out fields need a permission you don't have{!canTarget && marginsVisible ? " (target margin needs Manage projects)" : ""}.</p>}
+          <div className="mt-3 flex gap-2">
+            <Btn small onClick={save}>Save</Btn>
+            <Btn small kind="ghost" onClick={() => setF(null)}>Cancel</Btn>
+          </div>
         </Card>
       </div>
     </div>

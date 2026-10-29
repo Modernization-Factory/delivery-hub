@@ -167,7 +167,7 @@ async function resolveUser(req, res, next) {
     const permsDoc = await col("permissions").findOne({ _id: "global" });
     // mergePerms backfills roles/capabilities added after the stored doc was written (e.g. Viewer, plans.*)
     const perms = R.mergePerms(permsDoc && permsDoc.perms);
-    req.user = { employee, role: appRole, email: String(email).toLowerCase() };
+    req.user = { employee, role: appRole, email: String(email).toLowerCase(), perms };
     req.can = (cap) => R.canDo(perms, appRole, cap);
     next();
   } catch (err) {

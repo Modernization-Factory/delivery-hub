@@ -105,7 +105,7 @@ export const SCREENS = {
   AdminPanel: () => AdminPanel(ctx),
   ComingSoon: () => ComingSoon({ id: "reports", role: "Project Manager" }),
   LoginLive: () => LoginLive({ onEnter: noop }),
-  ProjectHealthDetail: () => ProjectHealthDetail({ row: healthRow, onBack: noop, marginsVisible: true, todayISO: TODAY, raid: ctx.raid }),
+  ProjectHealthDetail: () => ProjectHealthDetail({ row: healthRow, onBack: noop, marginsVisible: true, todayISO: TODAY, raid: ctx.raid, canRegister: true, canTarget: true, onSave: noop }),
 };
 export function renderScreen(name) {
   const Comp = SCREENS[name];
