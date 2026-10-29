@@ -46,7 +46,8 @@ const readProjects = (sheet, closed) => {
       name: txt(r[0]), pm: txt(r[1]), phase: txt(r[2]),
       start: R.excelToISO(r[3]), end: R.excelToISO(r[4]),
       totalStories: num(r[6]), doneStories: num(r[7]),
-      currentMargin: num(r[12]), keyUpdate: txt(r[15]), closed,
+      // the sheet stores a % cell as a fraction (7.75% = 0.0775); the app works in whole percent
+      currentMargin: num(r[12]) === null ? null : Math.round(num(r[12]) * 10000) / 100, keyUpdate: txt(r[15]), closed,
     });
   }
 };
