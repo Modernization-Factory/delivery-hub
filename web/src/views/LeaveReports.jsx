@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { parseISO, toISO } from "../lib/dates.js";
 import { fmtShort } from "../lib/dates.js";
-import { LEAVE_COLORS, isActiveDuring, leaveByMonth, leaveByProjectRole, leaveDaysInRange, monthsBetween } from "../lib/leave.js";
+import { LEAVE_COLORS, leaveColor, isActiveDuring, leaveByMonth, leaveByProjectRole, leaveDaysInRange, monthsBetween } from "../lib/leave.js";
 import { downloadXlsx } from "../lib/xlsx.js";
 import { Btn, Card, Field, Pill, Stat, inputCls } from "../ui/atoms.jsx";
 import { BRAND_FONT } from "../ui/brand.jsx";
@@ -233,7 +233,8 @@ export function LeaveMonthly(ctx) {
   const [to, setTo] = useState(thisYm);
   const [role, setRole] = useState("All");
   const [company, setCompany] = useState("All");
-  const [type, setType] = useState("All");
+  const [type0, setType] = useState("All");
+  const type = type0 === "All" || leaveTypes.some((t) => t.name === type0) ? type0 : "All"; // a renamed type's old filter resets
   const [groupBy, setGroupBy] = useState("role");
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(null); // resource row expanded to its leaves
@@ -279,10 +280,10 @@ export function LeaveMonthly(ctx) {
       ["By leave type", [["Leave type", "Days"], ...leaveTypes.map((t) => [t.name, r1(rep.totals.byType[t.name] || 0)])]],
     ];
     if (mode === "resource") {
-      sheets.push(["Leave records", [["Resource", "Role", "Company", "Start", "End", "Type", "Working days in range"],
+      sheets.push(["Leave records", [["Resource", "Role", "Company", "Start", "End", "Type", "Working days in range", "Comment"],
         ...rep.rows.flatMap((r) => leavesOf(r.key).map((l) => {
           const e = empByName[l.name];
-          return [l.name, e ? e.role : "", e ? e.company : "", l.start, l.end, l.type, r1(leaveDaysInRange(l, fromS, toS, leaveTypes, weekendDays, holidaySet))];
+          return [l.name, e ? e.role : "", e ? e.company : "", l.start, l.end, l.type, r1(leaveDaysInRange(l, fromS, toS, leaveTypes, weekendDays, holidaySet)), l.comment || ""];
         }))]]);
     }
     sheets.push(["Filters", filters]);
@@ -391,9 +392,10 @@ export function LeaveMonthly(ctx) {
                           <ul className="space-y-1">
                             {leavesOf(r.key).map((l) => (
                               <li key={l.id} className="flex items-center gap-2 text-xs text-slate-700">
-                                <Pill tone={LEAVE_COLORS[l.type] || "bg-slate-100 text-slate-600"}>{l.type}</Pill>
+                                <Pill tone={leaveColor(l.type, ctx.leaveTypes)}>{l.type}</Pill>
                                 <span>{fmtShort(l.start)}{l.start !== l.end ? " – " + fmtShort(l.end) : ""}</span>
                                 <span className="text-slate-400">{r1(leaveDaysInRange(l, fromS, toS, leaveTypes, weekendDays, holidaySet))} working day(s) in range</span>
+                                {l.comment && <span className="italic text-slate-600">“{l.comment}”</span>}
                               </li>
                             ))}
                           </ul>

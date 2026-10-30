@@ -37,13 +37,7 @@ export default function App() {
   const [leaves, setLeaves0] = useState([]);
   const [comps, setComps0] = useState([]);
   const [tcRows, setTcRows0] = useState([]);
-  const [leaveTypes, setLeaveTypes0] = useState([
-    { name: "Vacation", value: 1 },
-    { name: "Sick", value: 1 },
-    { name: "Unpaid", value: 1 },
-    { name: "Half Day", value: 0.5 },
-    { name: "Comp-Off", value: 1 },
-  ]);
+  const [leaveTypes, setLeaveTypes0] = useState([]); // from settings at sign-in
   const [weekendDays, setWeekendDays0] = useState([0, 6]); // Sun, Sat
   const [holidays, setHolidays0] = useState([]);
   const [tcWeeks, setTcWeeks0] = useState([]);
@@ -71,7 +65,7 @@ export default function App() {
 
   async function loadLeaves(empNameById) {
     const ls = await api("/leaves").catch((e) => (e.status === 403 ? api("/leaves?mine=1") : Promise.reject(e)));
-    setLeaves0(ls.map((l) => ({ id: String(l.id), name: empNameById[String(l.employeeId)], start: dstr(l.start), end: dstr(l.end), type: l.type })).filter((l) => l.name));
+    setLeaves0(ls.map((l) => ({ id: String(l.id), name: empNameById[String(l.employeeId)], start: dstr(l.start), end: dstr(l.end), type: l.type, comment: l.comment || "" })).filter((l) => l.name));
   }
   async function loadComps(empNameById) {
     const cs = await api("/compoffs").catch((e) => (e.status === 403 ? api("/compoffs?mine=1") : Promise.reject(e)));
@@ -187,7 +181,7 @@ export default function App() {
   const setLeaves = (next) => {
     const prev = leaves; setLeaves0(next);
     diffSync(prev, next, {
-      create: (l) => fire("/leaves", api("/leaves", { method: "POST", body: { employeeId: eid(l.name), start: l.start, end: l.end, type: l.type, force: true } }).then(() => loadLeaves(empNameByIdNow()))),
+      create: (l) => fire("/leaves", api("/leaves", { method: "POST", body: { employeeId: eid(l.name), start: l.start, end: l.end, type: l.type, comment: l.comment || "", force: true } }).then(() => loadLeaves(empNameByIdNow()))),
       remove: (l) => fire("/leaves", api("/leaves/" + l.id, { method: "DELETE" })),
     });
   };
@@ -317,6 +311,18 @@ export default function App() {
   const pushSettings = (lt, wd, hd) =>
     fire("/settings", api("/settings", { method: "PUT", body: { leaveTypes: lt, weekendDays: wd, holidays: hd } }));
   const setLeaveTypes = (next) => { setLeaveTypes0(next); pushSettings(next, weekendDays, holidays); };
+  // a leave's comment (e.g. tentative -> confirmed) is edited in place
+  const setLeaveComment = (id, comment) => {
+    setLeaves0((ls) => ls.map((l) => (l.id === id ? { ...l, comment } : l)));
+    fire("/leaves", api("/leaves/" + id + "/comment", { method: "PATCH", body: { comment } }));
+  };
+  // renames run server-side (settings + every leave of that type), then local state follows
+  async function renameLeaveType(from, to) {
+    const r = await api("/settings/leave-types/rename", { method: "PUT", body: { from, to } });
+    if (r.leaveTypes) setLeaveTypes0(r.leaveTypes);
+    setLeaves0((ls) => ls.map((l) => (l.type === from ? { ...l, type: to } : l)));
+    return r;
+  }
   const setWeekendDays = (next) => { setWeekendDays0(next); pushSettings(leaveTypes, next, holidays); };
   const setHolidays = (next) => { setHolidays0(next); pushSettings(leaveTypes, weekendDays, next); };
   const setExtLinks = (next) => { setExtLinks0(next); fire("/settings", api("/settings", { method: "PUT", body: { extLinks: next } })); };
@@ -476,7 +482,7 @@ export default function App() {
     setTcWeeks, assignments, setAssignments, projects: openProjects, allProjects: projects, setProjects, setProjectClosed, jiraFlags,
     scores, setScores, perfCfg, setPerfCfg, can, perms, setPerms, extLinks, setExtLinks, plans, setPlans, empFields, setEmpFields, raid, setRaid, milestones, setMilestones, weeklyHealth, setWeeklyHealth, pipeline, setPipeline, uploadTimecardFile, setTcFlag,
     todayISO, canManage, canConfigure, isDev, isAdmin,
-    setLeaves, setComps, setTcRows, setEmployees, setLeaveTypes, setWeekendDays, setHolidays, nextId, setNav, setEmployeeAdmin,
+    setLeaves, setLeaveComment, setComps, setTcRows, setEmployees, setLeaveTypes, renameLeaveType, setWeekendDays, setHolidays, nextId, setNav, setEmployeeAdmin,
   };
 
   return (
