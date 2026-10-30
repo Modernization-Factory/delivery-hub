@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { balancesFor, compOffDateValid, findOverlaps, isActiveDuring, isDuplicate, leaveByProjectRole, leaveByMonth, leaveDays, leaveDaysInRange, monthsBetween, onLeaveOn } from "../src/lib/leave.js";
+import { LEAVE_COLORS, balancesFor, compOffDateValid, compOffTypeName, leaveColor, findOverlaps, isActiveDuring, isDuplicate, leaveByProjectRole, leaveByMonth, leaveDays, leaveDaysInRange, monthsBetween, onLeaveOn } from "../src/lib/leave.js";
 import { HOLIDAYS, LEAVE_TYPES, NO_HOLIDAYS, WEEKEND } from "./fixtures.js";
 
 test("leaveDays counts working days and applies the type's day value", () => {
@@ -113,4 +113,21 @@ test("leaveByMonth splits a leave across months and groups by any key", () => {
   assert.equal(rep.totals.people.size, 2);
   const onlySick = leaveByMonth(leaves, empByName, ["2026-08"], LEAVE_TYPES, WEEKEND, NO_HOLIDAYS, (l) => l.name, (l) => l.type === "Sick");
   assert.deepEqual(onlySick.rows.map((r) => r.key), ["Ravi"]);
+});
+
+test("compOffTypeName follows the marked type, so a renamed comp-off type still spends balance", () => {
+  const types = [{ name: "Vacation", value: 1 }, { name: "Time in lieu", value: 1, compOff: true }];
+  assert.equal(compOffTypeName(types), "Time in lieu");
+  assert.equal(compOffTypeName([{ name: "Comp-Off", value: 1 }]), "Comp-Off"); // unmarked legacy config
+  const leaves = [{ name: "Asha", start: "2026-07-20", end: "2026-07-20", type: "Time in lieu" }];
+  const b = balancesFor("Asha", leaves, [{ name: "Asha", days: 2 }], types, WEEKEND, NO_HOLIDAYS);
+  assert.equal(b.compOffUsed, 1);
+  assert.equal(b.compOffBalance, 1);
+});
+
+test("leaveColor keeps the original colours and gives renamed types their slot's colour", () => {
+  const types = [{ name: "Vacation" }, { name: "Medical" }];
+  assert.equal(leaveColor("Vacation", types), LEAVE_COLORS.Vacation);
+  assert.equal(leaveColor("Medical", types), Object.values(LEAVE_COLORS)[1]);
+  assert.equal(leaveColor("Unknown", types), "bg-slate-100 text-slate-600");
 });

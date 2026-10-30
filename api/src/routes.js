@@ -101,10 +101,11 @@ router.get("/leaves", async (req, res) => {
   const mine = req.query.mine === "1";
   const q = mine ? { employeeId: req.user.employee._id } : {};
   const leaves = await col("leaves").find(q).sort({ start: -1 }).toArray();
-  res.json(leaves.map((l) => ({ id: l._id, employeeId: l.employeeId, start: iso(l.start), end: iso(l.end), type: l.type })));
+  res.json(leaves.map((l) => ({ id: l._id, employeeId: l.employeeId, start: iso(l.start), end: iso(l.end), type: l.type, comment: l.comment || "" })));
 });
 router.post("/leaves", audit("leave.create"), async (req, res) => {
   const { employeeId, start, end, type, force } = req.body;
+  const comment = String(req.body.comment || "").trim().slice(0, 300);
   const self = String(employeeId || "") === String(req.user.employee._id) || !employeeId;
   if (!self && !req.can("leave.forAnyone")) return res.status(403).json({ error: "forbidden" });
   const target = self ? req.user.employee : await col("employees").findOne({ _id: new ObjectId(employeeId) });
@@ -113,6 +114,9 @@ router.post("/leaves", audit("leave.create"), async (req, res) => {
   if (!start || !end || end < start) return res.status(422).json({ error: "invalid_dates" });
   const s = await settings();
   const { leaveTypes, weekendDays, holidaySet } = leaveCtx(s);
+  // only configured types: a stale name (e.g. from a tab opened before a rename) would
+  // otherwise be stored, count as a full day, and never be renamed with its type
+  if (!leaveTypes.some((t) => t.name === type)) return res.status(422).json({ error: "unknown_leave_type", detail: "\"" + type + "\" isn't a leave type any more — reload the page and pick one from the list." });
   const existing = (await col("leaves").find({ employeeId: target._id }).toArray()).map((l) => ({ id: String(l._id), name: target.name, start: iso(l.start), end: iso(l.end), type: l.type }));
   const entry = { name: target.name, start, end, type };
   if (R.isDuplicate(existing, entry)) return res.status(409).json({ error: "duplicate" });
@@ -120,8 +124,17 @@ router.post("/leaves", audit("leave.create"), async (req, res) => {
   if (days === 0) return res.status(422).json({ error: "no_working_days" });
   const overlaps = R.findOverlaps(existing, entry);
   if (overlaps.length && !force) return res.status(409).json({ error: "overlap", overlaps });
-  await col("leaves").insertOne({ employeeId: target._id, start: day(start), end: day(end), type, createdAt: new Date(), createdBy: req.user.employee.name });
+  await col("leaves").insertOne({ employeeId: target._id, start: day(start), end: day(end), type, ...(comment ? { comment } : {}), createdAt: new Date(), createdBy: req.user.employee.name });
   res.status(201).json({ ok: true, days, warnings: overlaps.length ? ["overlap_saved"] : [] });
+});
+router.patch("/leaves/:id/comment", audit("leave.comment"), async (req, res) => {
+  const l = await col("leaves").findOne({ _id: new ObjectId(req.params.id) });
+  if (!l) return res.status(404).json({ error: "not_found" });
+  const own = String(l.employeeId) === String(req.user.employee._id);
+  if (!own && !req.can("leave.forAnyone")) return res.status(403).json({ error: "forbidden" });
+  const comment = String((req.body && req.body.comment) || "").trim().slice(0, 300);
+  await col("leaves").updateOne({ _id: l._id }, comment ? { $set: { comment, updatedAt: new Date() } } : { $unset: { comment: "" }, $set: { updatedAt: new Date() } });
+  res.json({ ok: true });
 });
 router.delete("/leaves/:id", audit("leave.delete"), async (req, res) => {
   const l = await col("leaves").findOne({ _id: new ObjectId(req.params.id) });
@@ -562,7 +575,11 @@ router.put("/perf/config", requireCap("perf.config"), audit("perf.config"), asyn
 router.get("/settings", async (_req, res) => res.json(await settings()));
 router.put("/settings", requireCap("settings.edit"), audit("settings.update"), async (req, res) => {
   const { leaveTypes, weekendDays, holidays, extLinks, empFields } = req.body;
-  if (leaveTypes && leaveTypes.length > 5) return res.status(422).json({ error: "max_5_leave_types" });
+  if (leaveTypes) {
+    if (leaveTypes.length > 20) return res.status(422).json({ error: "too_many_leave_types", detail: "Up to 20 leave types." });
+    const names = leaveTypes.map((t) => String(t.name || "").trim().toLowerCase());
+    if (names.some((n) => !n) || new Set(names).size !== names.length) return res.status(422).json({ error: "invalid_leave_types", detail: "Leave type names must be unique and non-empty." });
+  }
   const $set = { updatedAt: new Date(), updatedBy: req.user.employee.name };
   if (leaveTypes !== undefined) Object.assign($set, { leaveTypes, weekendDays, holidays: (holidays || []).map(day) });
   if (empFields !== undefined) {
@@ -576,6 +593,26 @@ router.put("/settings", requireCap("settings.edit"), audit("settings.update"), a
   }
   await col("settings").updateOne({ _id: "global" }, { $set });
   res.json({ ok: true });
+});
+// Rename a leave type everywhere: the settings entry and every leave recorded under the old
+// name (leaves store the type by name, so renaming only the setting would orphan them).
+router.put("/settings/leave-types/rename", requireCap("settings.edit"), audit("settings.leaveType.rename"), async (req, res) => {
+  const from = String((req.body && req.body.from) || "").trim();
+  const to = String((req.body && req.body.to) || "").trim();
+  if (!from || !to) return res.status(422).json({ error: "from_and_to_required" });
+  if (to.length > 30) return res.status(422).json({ error: "name_too_long", detail: "Keep leave type names to 30 characters." });
+  const s = (await col("settings").findOne({ _id: "global" })) || {};
+  const types = s.leaveTypes || [];
+  const i = types.findIndex((t) => t.name === from);
+  if (i < 0) return res.status(404).json({ error: "type_not_found" });
+  if (from === to) return res.json({ ok: true, renamedLeaves: 0 });
+  if (types.some((t, j) => j !== i && t.name.toLowerCase() === to.toLowerCase())) return res.status(409).json({ error: "duplicate_name", detail: "A leave type called " + to + " already exists." });
+  // keep the comp-off marker with the type it belonged to, even if it was only matched by its old name
+  // the old name stays as an alias so source sheets and re-imports still map to this type
+  const next = types.map((t, j) => (j === i ? { ...t, name: to, aliases: [...new Set([...(t.aliases || []), from])].filter((a) => a !== to), ...(t.compOff || t.name === "Comp-Off" ? { compOff: true } : {}) } : t));
+  await col("settings").updateOne({ _id: "global" }, { $set: { leaveTypes: next, updatedAt: new Date(), updatedBy: req.user.employee.name } });
+  const r = await col("leaves").updateMany({ type: from }, { $set: { type: to } });
+  res.json({ ok: true, renamedLeaves: r.modifiedCount, leaveTypes: next });
 });
 router.get("/admin/permissions", requireAdmin, async (_req, res) => {
   const doc = await col("permissions").findOne({ _id: "global" });

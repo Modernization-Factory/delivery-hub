@@ -56,6 +56,11 @@ function compOffDateValid(dateISO, weekendDays, holidaySet) {
   const d = parseISO(dateISO);
   return isWeekend(d, weekendDays) || holidaySet.has(dateISO);
 }
+// the leave type that spends comp-off balance: marked in settings, so it survives a rename
+function compOffTypeName(leaveTypes) {
+  const t = leaveTypes.find((x) => x.compOff) || leaveTypes.find((x) => x.name === "Comp-Off");
+  return t ? t.name : "Comp-Off";
+}
 function balancesFor(name, leaves, comps, leaveTypes, weekendDays, holidaySet) {
   const byType = {};
   leaveTypes.forEach((t) => (byType[t.name] = 0));
@@ -66,7 +71,7 @@ function balancesFor(name, leaves, comps, leaveTypes, weekendDays, holidaySet) {
       byType[l.type] = (byType[l.type] || 0) + d;
     });
   const earned = comps.filter((c) => c.name === name).reduce((s, c) => s + Number(c.days), 0);
-  const used = byType["Comp-Off"] || 0;
+  const used = byType[compOffTypeName(leaveTypes)] || 0;
   return { byType, compOffEarned: earned, compOffUsed: used, compOffBalance: earned - used };
 }
 // employee active during [rangeStart, rangeEnd]? (start before range ends, end date not before range starts)
@@ -683,7 +688,7 @@ module.exports = {
   TC_STATUSES, METRICS, STREAMS, NAME_ALIASES, PERM_GROUPS, PARTNER_COS, OPEN_END, RUNWAY_ROLES,
   parseISO, toISO, isWeekend, isWorkingDay, workingDaysBetween, monthRange,
   leaveDays, leaveDaysInRange, isDuplicate, findOverlaps, compOffDateValid, balancesFor, onLeaveOn,
-  isActiveDuring, appRoleOf, appRoleForEmp, canDeletePastLeave,
+  isActiveDuring, appRoleOf, appRoleForEmp, compOffTypeName, canDeletePastLeave,
   tcStats, tcStatsFlex, weekCompliance, weekComplianceFlex, tcSuggested,
   excelToISO, parseTimecardGrid,
   aOverlaps, crossProjectConcurrent, activeAssignmentsOn, effortSplitInMonth, assignmentDaysInMonth, streamsInMonth, currentStream,

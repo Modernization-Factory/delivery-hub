@@ -19,7 +19,7 @@ export const PAGE_DATA = {
   perf: ["employees", "scores", "timecards", "projects", "assignments"],
   runway: ["employees", "projects", "assignments", "leaves"],
   employees: ["employees", "assignments"],
-  settings: ["settings"],
+  settings: ["settings", "employees", "leaves"],
   admin: ["employees", "leaves", "comps", "timecards", "assignments", "scores"],
 };
 

@@ -36,6 +36,11 @@ export function compOffDateValid(dateISO, weekendDays, holidaySet) {
   return isWeekend(d, weekendDays) || holidaySet.has(dateISO);
 }
 
+// the leave type that spends comp-off balance: marked in settings, so it survives a rename
+export function compOffTypeName(leaveTypes) {
+  const t = leaveTypes.find((x) => x.compOff) || leaveTypes.find((x) => x.name === "Comp-Off");
+  return t ? t.name : "Comp-Off";
+}
 export function balancesFor(name, leaves, comps, leaveTypes, weekendDays, holidaySet) {
   const byType = {};
   leaveTypes.forEach((t) => (byType[t.name] = 0));
@@ -46,7 +51,7 @@ export function balancesFor(name, leaves, comps, leaveTypes, weekendDays, holida
       byType[l.type] = (byType[l.type] || 0) + d;
     });
   const earned = comps.filter((c) => c.name === name).reduce((s, c) => s + Number(c.days), 0);
-  const used = byType["Comp-Off"] || 0;
+  const used = byType[compOffTypeName(leaveTypes)] || 0;
   return { byType, compOffEarned: earned, compOffUsed: used, compOffBalance: earned - used };
 }
 
@@ -104,6 +109,14 @@ export const LEAVE_COLORS = {
   "Half Day": "bg-violet-100 text-violet-800",
   "Comp-Off": "bg-teal-100 text-teal-800",
 };
+// colour for a leave type: the original five keep theirs; a renamed or new type takes the
+// colour of its slot in the settings list, so a rename never turns a type grey
+const SLOT_COLORS = Object.values(LEAVE_COLORS);
+export function leaveColor(typeName, leaveTypes) {
+  if (LEAVE_COLORS[typeName]) return LEAVE_COLORS[typeName];
+  const i = (leaveTypes || []).findIndex((t) => t.name === typeName);
+  return i >= 0 ? SLOT_COLORS[i % SLOT_COLORS.length] : "bg-slate-100 text-slate-600";
+}
 
 // "YYYY-MM" months from fromYm to toYm inclusive
 export function monthsBetween(fromYm, toYm) {

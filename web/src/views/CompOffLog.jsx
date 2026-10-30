@@ -9,8 +9,14 @@ import { usePaged } from "../ui/usePaged.jsx";
 // COMP-OFF LOG (Lead / PM / Admin)
 // ============================================================
 export function CompOffLog(ctx) {
-  const { comps, setComps, employees, weekendDays, holidaySet, nextId, leaves, leaveTypes, todayISO } = ctx;
-  const [who, setWho] = useState(employees[0] ? employees[0].name : "");
+  const { comps, setComps, employees, weekendDays, holidaySet, nextId, leaves, leaveTypes, todayISO, empByName } = ctx;
+  const [team, setTeam] = useState("All"); // company filter: narrows both the ledger and the employee picker
+  const [q, setQ] = useState("");
+  const coOf = (name) => (empByName[name] && empByName[name].company) || "—"; // empByName covers inactive people too
+  const teams = [...new Set([...employees.map((e) => e.company), ...comps.map((c) => coOf(c.name))].filter(Boolean))].sort();
+  const pickable = employees.filter((e) => team === "All" || e.company === team);
+  const [who0, setWho] = useState("");
+  const who = pickable.some((e) => e.name === who0) ? who0 : (pickable[0] ? pickable[0].name : "");
   const [date, setDate] = useState("");
   const [days, setDays] = useState("1");
   const [reason, setReason] = useState("");
@@ -28,16 +34,27 @@ export function CompOffLog(ctx) {
     setReason("");
     setMsg({ tone: "ok", text: "Comp-off logged: " + who + " earns " + days + " day(s) for " + fmt(date) + "." });
   }
-  const sorted = [...comps].sort((a, b) => b.date.localeCompare(a.date));
+  const shown = comps.filter((c) => (team === "All" || coOf(c.name) === team) && c.name.toLowerCase().includes(q.trim().toLowerCase()));
+  const sorted = [...shown].sort((a, b) => b.date.localeCompare(a.date));
+  const earnedShown = shown.reduce((t, c) => t + Number(c.days), 0);
   const { rows: coPage, pager: coPager } = usePaged(sorted, 25);
   return (
     <div className="space-y-4">
-      <h2 className="text-xl font-semibold text-slate-900" style={{ fontFamily: BRAND_FONT }}>Comp-Off Earned</h2>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-xl font-semibold text-slate-900" style={{ fontFamily: BRAND_FONT }}>Comp-Off Earned</h2>
+        <div className="flex flex-wrap gap-2">
+          <select className={inputCls + " w-40"} value={team} onChange={(e) => setTeam(e.target.value)} title="Company">
+            <option value="All">All companies</option>
+            {teams.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <input className={inputCls + " w-48"} placeholder="Search name…" value={q} onChange={(e) => setQ(e.target.value)} />
+        </div>
+      </div>
       <Card title="Log approved comp-off (weekend / holiday work only)">
         <div className="grid gap-3 sm:grid-cols-4">
           <Field label="Employee">
             <select className={inputCls} value={who} onChange={(e) => setWho(e.target.value)}>
-              {employees.map((e) => <option key={e.id} value={e.name}>{e.name}{e.term && e.term <= todayISO ? " (ended)" : ""}</option>)}
+              {pickable.map((e) => <option key={e.id} value={e.name}>{e.name}{e.term && e.term <= todayISO ? " (ended)" : ""}</option>)}
             </select>
           </Field>
           <Field label="Date worked"><input type="date" className={inputCls} value={date} onChange={(e) => setDate(e.target.value)} /></Field>
@@ -52,12 +69,12 @@ export function CompOffLog(ctx) {
         <div className="mt-3"><Btn onClick={add}>Log comp-off</Btn></div>
         {msg && <div className="mt-3"><Notice tone={msg.tone === "error" ? "error" : "ok"}>{msg.text}</Notice></div>}
       </Card>
-      <Card title={"Comp-off ledger (" + comps.length + " entries)"}>
+      <Card title={"Comp-off ledger (" + shown.length + (shown.length !== comps.length ? " of " + comps.length : "") + " entries · " + earnedShown + " days earned" + (team !== "All" ? " · " + team : "") + ")"}>
         <div className="max-h-[70vh] overflow-auto">
           <table className="w-full text-sm">
             <thead className="sticky top-0 bg-white">
               <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
-                <th className="py-2 pr-4">Employee</th><th className="py-2 pr-4">Date worked</th><th className="py-2 pr-4">Earned</th><th className="py-2 pr-4">Balance now</th><th className="py-2 pr-4">Reason</th><th />
+                <th className="py-2 pr-4">Employee</th><th className="py-2 pr-4">Company</th><th className="py-2 pr-4">Date worked</th><th className="py-2 pr-4">Earned</th><th className="py-2 pr-4">Balance now</th><th className="py-2 pr-4">Reason</th><th />
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -66,6 +83,7 @@ export function CompOffLog(ctx) {
                 return (
                   <tr key={c.id}>
                     <td className="py-1.5 pr-4 font-medium text-slate-800">{c.name}</td>
+                    <td className="py-1.5 pr-4 text-slate-500">{coOf(c.name)}</td>
                     <td className="py-1.5 pr-4">{fmt(c.date)}</td>
                     <td className="py-1.5 pr-4">{c.days}</td>
                     <td className="py-1.5 pr-4"><Pill tone={b.compOffBalance >= 0 ? "bg-teal-100 text-teal-800" : "bg-red-100 text-red-800"}>{b.compOffBalance}</Pill></td>

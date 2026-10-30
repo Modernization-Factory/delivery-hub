@@ -1,7 +1,7 @@
 import { STREAM_COLORS, activeAssignmentsOn } from "../lib/allocations.js";
 import { dataGaps, leavesBetween, myTimecardTrail, projectsOf, teamOf, timecardLaggards } from "../lib/dashboard.js";
 import { fmt, fmtShort, parseISO, toISO } from "../lib/dates.js";
-import { LEAVE_COLORS, balancesFor, onLeaveOn } from "../lib/leave.js";
+import { LEAVE_COLORS, leaveColor, balancesFor, onLeaveOn } from "../lib/leave.js";
 import { PH_RAG_TONE, phRowFor } from "../lib/programHealth.js";
 import { computeRunway, runwaySummary } from "../lib/runway.js";
 import { TC_COLORS, weekComplianceFlex } from "../lib/timecard.js";
@@ -100,7 +100,7 @@ export function Dashboard(ctx) {
             <div>
               <div className="text-xs text-slate-500">My leave this year</div>
               <div className="mt-1 flex flex-wrap gap-1">
-                {leaveTypes.filter((lt) => mine.byType[lt.name]).map((lt) => <Pill key={lt.name} tone={LEAVE_COLORS[lt.name] || "bg-slate-100 text-slate-600"}>{lt.name} {mine.byType[lt.name]}</Pill>)}
+                {leaveTypes.filter((lt) => mine.byType[lt.name]).map((lt) => <Pill key={lt.name} tone={leaveColor(lt.name, ctx.leaveTypes)}>{lt.name} {mine.byType[lt.name]}</Pill>)}
                 {!leaveTypes.some((lt) => mine.byType[lt.name]) && <span className="text-slate-400">No leave taken</span>}
               </div>
             </div>
@@ -111,10 +111,10 @@ export function Dashboard(ctx) {
           {team.size ? (
             <>
               <p className="mb-2 text-xs text-slate-500">{team.size} {team.size === 1 ? "person" : "people"} on your project{myPmProjects.length + projectsOf(assignments, user.name, todayISO).length > 1 ? "s" : ""} · {teamAwayToday.length ? teamAwayToday.length + " away today" : "everyone in today"}</p>
-              <LeaveList leaves={teamAwaySoon} todayISO={todayISO} empty="Nobody on your team has leave in the next two weeks." />
+              <LeaveList leaves={teamAwaySoon} todayISO={todayISO} leaveTypes={leaveTypes} empty="Nobody on your team has leave in the next two weeks." />
             </>
           ) : (
-            <LeaveList leaves={leavesBetween(leaves, wkStart, wkEnd)} todayISO={todayISO} empty="No one is on leave this week." />
+            <LeaveList leaves={leavesBetween(leaves, wkStart, wkEnd)} todayISO={todayISO} leaveTypes={leaveTypes} empty="No one is on leave this week." />
           )}
         </Card>
       </div>
@@ -255,7 +255,7 @@ export function Dashboard(ctx) {
   );
 }
 
-function LeaveList({ leaves, todayISO, empty }) {
+function LeaveList({ leaves, todayISO, empty, leaveTypes }) {
   if (!leaves.length) return <p className="text-sm text-slate-500">{empty}</p>;
   return (
     <ul className="divide-y divide-slate-100">
@@ -263,9 +263,9 @@ function LeaveList({ leaves, todayISO, empty }) {
         <li key={l.id} className="flex items-center justify-between py-1.5">
           <div>
             <div className="text-sm font-medium text-slate-800">{l.name}{l.start <= todayISO && todayISO <= l.end && <span className="ml-1 text-xs font-normal text-emerald-700">away today</span>}</div>
-            <div className="text-xs text-slate-500">{fmtShort(l.start)}{l.start !== l.end ? " – " + fmtShort(l.end) : ""}</div>
+            <div className="text-xs text-slate-500">{fmtShort(l.start)}{l.start !== l.end ? " – " + fmtShort(l.end) : ""}{l.comment ? <span className="italic text-slate-600"> · {l.comment}</span> : null}</div>
           </div>
-          <Pill tone={LEAVE_COLORS[l.type] || "bg-slate-100 text-slate-600"}>{l.type}</Pill>
+          <Pill tone={leaveColor(l.type, leaveTypes)}>{l.type}</Pill>
         </li>
       ))}
       {leaves.length > 8 && <li className="py-1.5 text-xs text-slate-400">+ {leaves.length - 8} more on the calendar</li>}
