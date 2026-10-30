@@ -8,6 +8,7 @@ import { usePaged } from "../ui/usePaged.jsx";
 import { FlaggedResources } from "../ui/FlaggedResources.jsx";
 import { WeekLeavePanel } from "../ui/LeaveEditor.jsx";
 import { onLeaveWholeWeek, tcWeekDays } from "../lib/leave.js";
+import { canDeletePastLeave } from "../lib/permissions.js";
 
 // ============================================================
 // TIMECARD GRID
@@ -121,6 +122,8 @@ export function TimecardGrid(ctx) {
   const leaveIn = (name, w) => { const [a, b] = weekSpan(w); return ctx.leaves.filter((l) => l.name === name && l.start <= b && a <= l.end); };
   const { rows: gridRows, pager: gridPager } = usePaged(rows, 25);
   const canFlag = ctx.can("timecard.flag") && !!ctx.setTcFlag;
+  // leave markers and add / edit leave from the grid: PM and Admin only
+  const leaveOnGrid = canDeletePastLeave(user.role);
   const [flagEdit, setFlagEdit] = useState(null); // { rowId, name, weekIdx, comment, existing }
   const [flagBusy, setFlagBusy] = useState(false);
   function openFlag(r, wi) {
@@ -271,10 +274,17 @@ export function TimecardGrid(ctx) {
                       // bold 🌴 = away the whole week (what sets N/A); faint = some days off
                       const fullWeek = lv.length > 0 && onLeaveWholeWeek(r.name, tcWeeks[wi], ctx.leaves, ctx.leaveTypes, ctx.weekendDays, ctx.holidaySet);
                       const auto = (r.autoNA || {})[wi] || [];
-                      const leaveBtn = lv.length > 0 && (
-                        <button type="button" onClick={(e) => { e.stopPropagation(); setActiveRow(r.id); setFlagEdit(null); setWeekLeave(weekLeave && weekLeave.rowId === r.id && weekLeave.wi === wi ? null : { rowId: r.id, name: r.name, wi }); }}
+                      // 🌴 opens the person-week leave panel: always when there is leave; on hover for
+                      // empty weeks when this user may add leave for that person (PM / Lead, or themselves)
+                      const canAddFor = leaveOnGrid;
+                      const openLeave = (e) => { e.stopPropagation(); setActiveRow(r.id); setFlagEdit(null); setWeekLeave(weekLeave && weekLeave.rowId === r.id && weekLeave.wi === wi ? null : { rowId: r.id, name: r.name, wi }); };
+                      const leaveBtn = !leaveOnGrid ? null : lv.length > 0 ? (
+                        <button type="button" onClick={openLeave}
                           title={lv.map((l) => l.type + " " + fmtShort(l.start) + (l.start !== l.end ? "–" + fmtShort(l.end) : "") + (l.comment ? " · " + l.comment : "")).join("\n") + "\nClick to view / edit"}
                           className={"ml-0.5 align-middle text-xs " + (fullWeek ? "" : "opacity-40 hover:opacity-100")}>🌴</button>
+                      ) : canAddFor && (
+                        <button type="button" onClick={openLeave} title={"Add leave for " + r.name + " this week"}
+                          className="ml-0.5 align-middle text-[10px] text-slate-400 opacity-0 hover:text-emerald-700 group-hover:opacity-100">+🌴</button>
                       );
                       const flagBtn = (canFlag || note) && (
                         <button type="button" disabled={!canFlag} onClick={(e) => { e.stopPropagation(); openFlag(r, wi); }}
@@ -332,7 +342,7 @@ export function TimecardGrid(ctx) {
         {rows.length === 0 && (statusF || flaggedOnly) && <p className="mt-2 text-sm text-slate-500">Nobody matches these filters in the weeks shown.</p>}
         <div className="mt-3 flex flex-wrap gap-2 text-xs">
           {TC_STATUSES.map((s) => <Pill key={s} tone={TC_COLORS[s]}>{s}</Pill>)}
-          <span className="self-center text-slate-400">🌴 = leave that week (bold = the whole week; click to view{ctx.can("leave.forAnyone") ? " / add / edit" : ""}) · "auto" = N/A set because of a full week of leave{canManage ? " · click a cell to update" : ""}{canFlag ? " · ⚑ flags a week as an outlier" : ""} · "n/t" = JIRA not tracked for that project. Weeks are dated by their Sunday and cover the Mon–Fri after it.</span>
+          <span className="self-center text-slate-400">{leaveOnGrid ? "🌴 = leave that week (bold = the whole week; click to view / edit) · hover a week and click +🌴 to add leave · " : ""}"auto" = N/A set because of a full week of leave{canManage ? " · click a cell to update" : ""}{canFlag ? " · ⚑ flags a week as an outlier" : ""} · "n/t" = JIRA not tracked for that project. Weeks are dated by their Sunday and cover the Mon–Fri after it.</span>
         </div>
       </Card>}
     </div>
