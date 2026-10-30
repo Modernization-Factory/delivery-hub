@@ -10,7 +10,7 @@ export const PAGE_DATA = {
   allrecords: ["employees", "leaves"],
   compoff: ["employees", "comps", "leaves"],
   reports: ["employees", "leaves", "projects", "assignments"],
-  timecard: ["employees", "timecards", "projects", "assignments"],
+  timecard: ["employees", "timecards", "projects", "assignments", "leaves"],
   tcsummary: ["employees", "timecards", "projects", "assignments"],
   alloc: ["employees", "assignments", "projects", "leaves"],
   projects: ["employees", "projects", "assignments", "raid", "milestones"],

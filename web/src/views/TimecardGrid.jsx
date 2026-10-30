@@ -6,6 +6,8 @@ import { Btn, Card, Field, Notice, Pill, inputCls } from "../ui/atoms.jsx";
 import { BRAND_FONT } from "../ui/brand.jsx";
 import { usePaged } from "../ui/usePaged.jsx";
 import { FlaggedResources } from "../ui/FlaggedResources.jsx";
+import { WeekLeavePanel } from "../ui/LeaveEditor.jsx";
+import { onLeaveWholeWeek, tcWeekDays } from "../lib/leave.js";
 
 // ============================================================
 // TIMECARD GRID
@@ -18,10 +20,17 @@ export function TimecardGrid(ctx) {
   const [pending, setPending] = useState(null); // parsed upload awaiting confirmation
   const [impMsg, setImpMsg] = useState(null);
   const WIN = 8; // weeks visible at once
-  const [winStart, setWinStart] = useState(Math.max(0, tcWeeks.length - WIN));
-  const maxStart = Math.max(0, tcWeeks.length - WIN);
-  const start = Math.min(Math.max(0, winStart), maxStart);
-  const visWeeks = tcWeeks.map((w, i) => ({ w, i })).slice(start, start + WIN);
+  // newest week is the leftmost column: `offset` = how many weeks back from the newest the window starts
+  const [offset0, setOffset] = useState(0);
+  const maxOffset = Math.max(0, tcWeeks.length - WIN);
+  const offset = Math.min(Math.max(0, offset0), maxOffset);
+  const visWeeks = tcWeeks.map((w, i) => ({ w, i })).reverse().slice(offset, offset + WIN);
+  const setWinStart = () => setOffset(0); // after an import / new week, jump to the newest
+  const [tab, setTab] = useState("grid"); // grid | flagged | outliers
+  const [activeRow, setActiveRow] = useState(null); // row being worked on — highlighted
+  const [weekLeave, setWeekLeave] = useState(null); // { name, wi } — leave panel for one person-week
+  const [statusF, setStatusF] = useState(""); // show only people with this status in the visible weeks
+  const [flaggedOnly, setFlaggedOnly] = useState(false);
 
   async function handleFile(e) {
     const file = e.target.files[0];
@@ -94,21 +103,28 @@ export function TimecardGrid(ctx) {
     setTcWeeks([...tcWeeks, nextWeekISO]);
     setTcRows(tcRows.map((r) => ({ ...r, weeks: [...r.weeks, ["", ""]] })));
     setWinStart(Number.MAX_SAFE_INTEGER);
-    setImpMsg({ tone: "ok", text: "Week ending " + fmt(nextWeekISO) + " added — every resource gets blank SF/JIRA cells to fill through the week." });
+    setImpMsg({ tone: "ok", text: "Week of " + fmt(nextWeekISO) + " added — every resource gets blank SF/JIRA cells; anyone on leave the whole week gets N/A automatically." });
   }
   const companies = ["All", ...Array.from(new Set(tcRows.map((r) => SEEDCO(r.name)))).sort()];
   function SEEDCO(name) {
     const e = ctx.empByName[name];
     return e ? e.company : "—";
   }
+  const visIdx = visWeeks.map((v) => v.i);
+  const hasStatus = (r) => !statusF || visIdx.some((i) => (r.weeks[i] || []).includes(statusF));
+  const hasFlag = (r) => !flaggedOnly || visIdx.some((i) => (r.notes || {})[i]);
   const rows = isDev
     ? tcRows.filter((r) => r.name === user.name)
-    : tcRows.filter((r) => r.name.toLowerCase().includes(q.toLowerCase()) && (co === "All" || SEEDCO(r.name) === co));
+    : tcRows.filter((r) => r.name.toLowerCase().includes(q.toLowerCase()) && (co === "All" || SEEDCO(r.name) === co) && hasStatus(r) && hasFlag(r));
+  // leave per person-week (dated Sunday, covers the Mon-Fri after) for the grid's leave markers
+  const weekSpan = (w) => { const d = tcWeekDays(w, ctx.weekendDays, ctx.holidaySet); return [d[0] || w, d[d.length - 1] || w]; };
+  const leaveIn = (name, w) => { const [a, b] = weekSpan(w); return ctx.leaves.filter((l) => l.name === name && l.start <= b && a <= l.end); };
   const { rows: gridRows, pager: gridPager } = usePaged(rows, 25);
   const canFlag = ctx.can("timecard.flag") && !!ctx.setTcFlag;
   const [flagEdit, setFlagEdit] = useState(null); // { rowId, name, weekIdx, comment, existing }
   const [flagBusy, setFlagBusy] = useState(false);
   function openFlag(r, wi) {
+    setActiveRow(r.id); setWeekLeave(null);
     const n = (r.notes || {})[wi];
     setFlagEdit({ rowId: r.id, name: r.name, weekIdx: wi, comment: n ? n.comment : "", existing: !!n });
   }
@@ -116,13 +132,19 @@ export function TimecardGrid(ctx) {
     setFlagBusy(true);
     try {
       await ctx.setTcFlag(flagEdit.rowId, flagEdit.weekIdx, flagged ? { comment: flagEdit.comment.trim() } : null);
-      setImpMsg({ tone: "ok", text: (flagged ? "Flagged " : "Removed the flag on ") + flagEdit.name + " · week ending " + fmtShort(tcWeeks[flagEdit.weekIdx]) + "." });
+      setImpMsg({ tone: "ok", text: (flagged ? "Flagged " : "Removed the flag on ") + flagEdit.name + " · week of " + fmtShort(tcWeeks[flagEdit.weekIdx]) + "." });
       setFlagEdit(null);
     } catch (e) {
       setImpMsg({ tone: "error", text: "Couldn't save the flag: " + e.message });
     } finally { setFlagBusy(false); }
   }
+  async function deleteFlag(r, wi) {
+    if (!window.confirm("Remove the outlier flag on " + r.name + " · week of " + fmtShort(tcWeeks[wi]) + "?")) return;
+    try { await ctx.setTcFlag(r.id, wi, null); setImpMsg({ tone: "ok", text: "Removed the flag on " + r.name + " · week of " + fmtShort(tcWeeks[wi]) + "." }); }
+    catch (e) { setImpMsg({ tone: "error", text: "Couldn't remove the flag: " + e.message }); }
+  }
   function setCell(rowId, weekIdx, slot, value) {
+    setActiveRow(rowId);
     setTcRows(tcRows.map((r) => {
       if (r.id !== rowId) return r;
       const weeks = r.weeks.map((w, i) => (i === weekIdx ? [slot === 0 ? value : w[0], slot === 1 ? value : w[1]] : w));
@@ -168,34 +190,45 @@ export function TimecardGrid(ctx) {
           </div>
         </Card>
       )}
-      {!isDev && <OutlierPanel rows={tcRows} weeks={tcWeeks} jiraFlags={jiraFlags} />}
-      {!isDev && <FlaggedResources tcRows={tcRows} tcWeeks={tcWeeks} empByName={empByName} onEdit={canFlag ? openFlag : null} />}
-      {flagEdit && (
-        <Card title={"Outlier flag — " + flagEdit.name + " · week ending " + fmtShort(tcWeeks[flagEdit.weekIdx])}>
-          <Field label="Comment (why this week is an outlier)">
-            <textarea className={inputCls + " h-20"} maxLength={500} value={flagEdit.comment} autoFocus
-              onChange={(e) => setFlagEdit({ ...flagEdit, comment: e.target.value })} placeholder="e.g. chased twice for SF; JIRA updated on Tuesday" />
-          </Field>
-          <div className="mt-3 flex gap-2">
-            <Btn small disabled={flagBusy} onClick={() => saveFlag(true)}>{flagEdit.existing ? "Save flag" : "Flag as outlier"}</Btn>
-            {flagEdit.existing && <Btn small kind="danger" disabled={flagBusy} onClick={() => saveFlag(false)}>Remove flag</Btn>}
-            <Btn small kind="ghost" disabled={flagBusy} onClick={() => setFlagEdit(null)}>Cancel</Btn>
-          </div>
-        </Card>
+      {!isDev && (
+        <div className="flex overflow-hidden rounded-lg border border-slate-300 bg-white" style={{ width: "fit-content" }}>
+          {[["grid", "Grid"], ["flagged", "Flagged (" + tcRows.reduce((n, r) => n + Object.keys(r.notes || {}).length, 0) + ")"], ["outliers", "Outliers by week"]].map(([v, lab]) => (
+            <button key={v} onClick={() => setTab(v)}
+              className={"px-4 py-2 text-sm font-medium transition " + (tab === v ? "mdb-btn-primary text-white" : "bg-white text-slate-600 hover:bg-slate-50")}>{lab}</button>
+          ))}
+        </div>
+      )}
+      {!isDev && tab === "outliers" && <OutlierPanel rows={tcRows} weeks={tcWeeks} jiraFlags={jiraFlags} />}
+      {!isDev && tab === "flagged" && (
+        <>
+          {flagEdit && <FlagEditor flagEdit={flagEdit} setFlagEdit={setFlagEdit} busy={flagBusy} onSave={saveFlag} weekLabel={fmtShort(tcWeeks[flagEdit.weekIdx])} />}
+          <FlaggedResources tcRows={tcRows} tcWeeks={tcWeeks} empByName={empByName} asTable onEdit={canFlag ? openFlag : null} onDelete={canFlag ? deleteFlag : null} />
+        </>
       )}
       {isDev && rows.length === 0 && (
         <Notice tone="warn">You're not on the timecard grid yet — your lead or PM will add you when SF / JIRA tracking starts for you.</Notice>
       )}
-      <Card>
+      {(isDev || tab === "grid") && <Card>
         <div className="mb-3 flex flex-wrap items-center gap-2">
-          <Btn kind="ghost" small onClick={() => setWinStart(0)} disabled={start === 0}>« First</Btn>
-          <Btn kind="ghost" small onClick={() => setWinStart(start - WIN)} disabled={start === 0}>← Earlier</Btn>
-          <select className={inputCls + " w-48"} value={start} onChange={(e) => setWinStart(Math.min(Number(e.target.value), maxStart))}>
-            {tcWeeks.map((w, i) => <option key={w} value={i}>week ending {fmtShort(w)}</option>)}
+          <Btn kind="ghost" small onClick={() => setOffset(0)} disabled={offset === 0}>« Newest</Btn>
+          <Btn kind="ghost" small onClick={() => setOffset(offset - WIN)} disabled={offset === 0}>← Newer</Btn>
+          <select className={inputCls + " w-44"} value={offset} onChange={(e) => setOffset(Number(e.target.value))}>
+            {tcWeeks.map((w, i) => ({ w, off: tcWeeks.length - 1 - i })).reverse().map(({ w, off }) => <option key={w} value={Math.min(off, maxOffset)}>from week of {fmtShort(w)}</option>)}
           </select>
-          <Btn kind="ghost" small onClick={() => setWinStart(start + WIN)} disabled={start >= maxStart}>Later →</Btn>
-          <Btn kind="ghost" small onClick={() => setWinStart(maxStart)} disabled={start >= maxStart}>Latest »</Btn>
-          <span className="text-xs text-slate-500">showing weeks {start + 1}–{start + visWeeks.length} of {tcWeeks.length}</span>
+          <Btn kind="ghost" small onClick={() => setOffset(offset + WIN)} disabled={offset >= maxOffset}>Older →</Btn>
+          <span className="text-xs text-slate-500">{visWeeks.length} of {tcWeeks.length} weeks · newest first</span>
+          {!isDev && (
+            <span className="ml-auto flex flex-wrap items-center gap-2">
+              <select className={inputCls + " w-44"} value={statusF} onChange={(e) => setStatusF(e.target.value)} title="Show people with this status in the weeks shown">
+                <option value="">Any status</option>
+                {TC_STATUSES.map((st) => <option key={st} value={st}>Has {st}</option>)}
+              </select>
+              <label className="flex cursor-pointer items-center gap-1.5 text-xs text-slate-600">
+                <input type="checkbox" className="h-4 w-4 accent-amber-600" checked={flaggedOnly} onChange={(e) => setFlaggedOnly(e.target.checked)} />⚑ flagged only
+              </label>
+              {(statusF || flaggedOnly) && <Btn small kind="ghost" onClick={() => { setStatusF(""); setFlaggedOnly(false); }}>Clear</Btn>}
+            </span>
+          )}
         </div>
         <div className="max-h-[70vh] overflow-auto">
           <table className="min-w-full border-separate text-xs" style={{ borderSpacing: 0 }}>
@@ -208,7 +241,7 @@ export function TimecardGrid(ctx) {
                 <th className="border-b border-l border-slate-200 bg-white px-2 py-2 font-semibold text-slate-600">Proactive %</th>
               </tr>
               <tr>
-                <th className="sticky left-0 z-20 border-b border-slate-200 bg-white px-2 py-1 text-left font-normal text-slate-400">week ending →</th>
+                <th className="sticky left-0 z-20 border-b border-slate-200 bg-white px-2 py-1 text-left font-normal text-slate-400">week of →</th>
                 {visWeeks.map(({ w }) => [
                   <th key={w + "sf"} className="border-b border-l border-slate-200 bg-slate-50 px-1 py-1 font-medium text-slate-500">SF</th>,
                   <th key={w + "j"} className="border-b border-slate-200 bg-slate-50 px-1 py-1 font-medium text-slate-500">JIRA</th>,
@@ -219,9 +252,11 @@ export function TimecardGrid(ctx) {
             <tbody>
               {gridRows.map((r) => {
                 const st = tcStatsFlex(r.weeks, jiraFlags[r.id]);
-                return (
-                  <tr key={r.id} className="group">
-                    <td className="sticky left-0 z-10 whitespace-nowrap border-b border-slate-100 bg-white px-2 py-1 font-medium text-slate-800 group-hover:bg-slate-50">
+                const active = activeRow === r.id;
+                const panelOpen = (weekLeave && weekLeave.rowId === r.id) || (flagEdit && flagEdit.rowId === r.id && tab === "grid");
+                return [
+                  <tr key={r.id} className={"group " + (active ? "bg-emerald-50" : "")} onClick={() => setActiveRow(r.id)}>
+                    <td className={"sticky left-0 z-10 whitespace-nowrap border-b border-slate-100 px-2 py-1 font-medium text-slate-800 " + (active ? "bg-emerald-100 shadow-[inset_3px_0_0_#059669]" : "bg-white group-hover:bg-slate-50")}>
                       {r.name}
                       <span className="ml-1 text-xs text-slate-400">{r.release}</span>
                       {r.remarks && <span className="ml-1 cursor-help text-amber-500" title={r.remarks}>ⓘ</span>}
@@ -232,8 +267,17 @@ export function TimecardGrid(ctx) {
                       const note = !isDev && (r.notes || {})[wi];
                       // a flagged person-week is outlined in amber across its SF + JIRA cells
                       const hl = note ? (slot) => " bg-amber-50 border-y-2 border-amber-400" + (slot === 0 ? " border-l-2" : " border-r-2") : () => "";
+                      const lv = leaveIn(r.name, tcWeeks[wi]);
+                      // bold 🌴 = away the whole week (what sets N/A); faint = some days off
+                      const fullWeek = lv.length > 0 && onLeaveWholeWeek(r.name, tcWeeks[wi], ctx.leaves, ctx.leaveTypes, ctx.weekendDays, ctx.holidaySet);
+                      const auto = (r.autoNA || {})[wi] || [];
+                      const leaveBtn = lv.length > 0 && (
+                        <button type="button" onClick={(e) => { e.stopPropagation(); setActiveRow(r.id); setFlagEdit(null); setWeekLeave(weekLeave && weekLeave.rowId === r.id && weekLeave.wi === wi ? null : { rowId: r.id, name: r.name, wi }); }}
+                          title={lv.map((l) => l.type + " " + fmtShort(l.start) + (l.start !== l.end ? "–" + fmtShort(l.end) : "") + (l.comment ? " · " + l.comment : "")).join("\n") + "\nClick to view / edit"}
+                          className={"ml-0.5 align-middle text-xs " + (fullWeek ? "" : "opacity-40 hover:opacity-100")}>🌴</button>
+                      );
                       const flagBtn = (canFlag || note) && (
-                        <button type="button" disabled={!canFlag} onClick={() => openFlag(r, wi)}
+                        <button type="button" disabled={!canFlag} onClick={(e) => { e.stopPropagation(); openFlag(r, wi); }}
                           title={note ? "Outlier: " + (note.comment || "(no comment)") + " — " + note.by + (canFlag ? " · click to edit" : "") : "Flag this week as an outlier"}
                           className={"ml-0.5 align-middle text-xs " + (note ? "text-amber-600" : "text-slate-300 opacity-0 group-hover:opacity-100 hover:text-amber-600")}>⚑</button>
                       );
@@ -256,7 +300,9 @@ export function TimecardGrid(ctx) {
                           ) : (
                             <div style={{ width: 86 }} className={"inline-block rounded px-1 py-1 text-center text-xs font-medium " + TC_COLORS[w[slot] || ""]}>{w[slot] || "—"}</div>
                           )}
+                          {auto.includes(slot === 0 ? "sf" : "jira") && <span title="Set to N/A automatically — on leave the whole week" className="ml-0.5 align-middle text-[10px] text-slate-400">auto</span>}
                           {slot === 0 && flagBtn}
+                          {slot === 1 && leaveBtn}
                         </td>
                       ));
                     })}
@@ -265,18 +311,30 @@ export function TimecardGrid(ctx) {
                         <Pill tone={st.pct >= 80 ? "bg-emerald-100 text-emerald-800" : st.pct >= 60 ? "bg-amber-100 text-amber-800" : "bg-red-100 text-red-800"}>{st.pct}%</Pill>
                       )}
                     </td>
-                  </tr>
-                );
+                  </tr>,
+                  panelOpen && (
+                    <tr key={r.id + "_panel"}>
+                      <td colSpan={visWeeks.length * 2 + 2} className="border-b border-emerald-200 bg-emerald-50/50 px-3 py-3">
+                        <div className="sticky left-3" style={{ maxWidth: 900 }}>
+                          {weekLeave && weekLeave.rowId === r.id
+                            ? <WeekLeavePanel name={r.name} weekISO={tcWeeks[weekLeave.wi]} ctx={ctx} onClose={() => setWeekLeave(null)} />
+                            : <FlagEditor flagEdit={flagEdit} setFlagEdit={setFlagEdit} busy={flagBusy} onSave={saveFlag} weekLabel={fmtShort(tcWeeks[flagEdit.weekIdx])} inline />}
+                        </div>
+                      </td>
+                    </tr>
+                  ),
+                ];
               })}
             </tbody>
           </table>
         </div>
         {gridPager}
+        {rows.length === 0 && (statusF || flaggedOnly) && <p className="mt-2 text-sm text-slate-500">Nobody matches these filters in the weeks shown.</p>}
         <div className="mt-3 flex flex-wrap gap-2 text-xs">
           {TC_STATUSES.map((s) => <Pill key={s} tone={TC_COLORS[s]}>{s}</Pill>)}
-          {canManage && <span className="self-center text-slate-400">Click any cell to update · hover a week and click ⚑ to flag it as an outlier with a comment. "n/t" = JIRA not tracked for that project (configured per project in the Projects menu) — excluded from the score.</span>}
+          <span className="self-center text-slate-400">🌴 = leave that week (bold = the whole week; click to view{ctx.can("leave.forAnyone") ? " / add / edit" : ""}) · "auto" = N/A set because of a full week of leave{canManage ? " · click a cell to update" : ""}{canFlag ? " · ⚑ flags a week as an outlier" : ""} · "n/t" = JIRA not tracked for that project. Weeks are dated by their Sunday and cover the Mon–Fri after it.</span>
         </div>
-      </Card>
+      </Card>}
     </div>
   );
 }
@@ -301,7 +359,7 @@ function OutlierPanel({ rows, weeks, jiraFlags }) {
         <table className="w-full text-xs">
           <thead>
             <tr className="border-b border-slate-200 text-left uppercase tracking-wide text-slate-500">
-              <th className="py-2 pr-3">Week ending</th>
+              <th className="py-2 pr-3">Week of</th>
               {cols.map((s) => <th key={s} className={"py-2 pr-3 text-center " + (TC_PROBLEM.includes(s) ? "text-red-600" : "")}>{s}</th>)}
               <th className="py-2 pr-3 text-center">People with an issue</th>
               <th className="py-2 pr-3 text-center text-amber-600">⚑ Flagged</th>
@@ -325,4 +383,21 @@ function OutlierPanel({ rows, weeks, jiraFlags }) {
       <p className="mt-1 text-xs text-slate-400">Counts are SF / JIRA. Red columns are problem statuses; "People with an issue" counts anyone with at least one of them that week. Completed = filled cells. JIRA cells are skipped on weeks the project doesn't track JIRA.</p>
     </Card>
   );
+}
+
+// Outlier flag editor — inline under the grid row, or above the Flagged table
+function FlagEditor({ flagEdit, setFlagEdit, busy, onSave, weekLabel, inline }) {
+  const body = (
+    <>
+      <div className="mb-1 text-sm font-semibold text-slate-800">⚑ Outlier — {flagEdit.name} · week of {weekLabel}</div>
+      <textarea className={inputCls + " h-16"} maxLength={500} value={flagEdit.comment} autoFocus
+        onChange={(e) => setFlagEdit({ ...flagEdit, comment: e.target.value })} placeholder="Why is this week an outlier? e.g. chased twice for SF; JIRA updated Tuesday" />
+      <div className="mt-2 flex gap-2">
+        <Btn small disabled={busy} onClick={() => onSave(true)}>{flagEdit.existing ? "Save comment" : "Flag as outlier"}</Btn>
+        {flagEdit.existing && <Btn small kind="danger" disabled={busy} onClick={() => onSave(false)}>Remove flag</Btn>}
+        <Btn small kind="ghost" disabled={busy} onClick={() => setFlagEdit(null)}>Cancel</Btn>
+      </div>
+    </>
+  );
+  return inline ? body : <Card>{body}</Card>;
 }

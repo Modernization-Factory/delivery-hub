@@ -5,7 +5,7 @@ import { downloadXlsx } from "../lib/xlsx.js";
 import { Btn, Card, Pill, inputCls } from "./atoms.jsx";
 // every flagged person-week as export rows (newest week first)
 export function flaggedSheet(rows, weeks, empByName, keep = () => true) {
-  const out = [["Resource", "Company", "Role", "Week ending", "SF", "JIRA", "Comment", "Flagged by", "Flagged on"]];
+  const out = [["Resource", "Company", "Role", "Week of", "SF", "JIRA", "Comment", "Flagged by", "Flagged on"]];
   rows.forEach((r) => Object.entries(r.notes || {}).forEach(([wi, n]) => {
     if (!keep(r, Number(wi))) return;
     const e = empByName[r.name];
@@ -16,7 +16,9 @@ export function flaggedSheet(rows, weeks, empByName, keep = () => true) {
 }
 
 // Flagged resources — everyone with outlier flags, grouped by person, with every comment.
-export function FlaggedResources({ tcRows, tcWeeks, empByName, setNav, onEdit }) {
+// `asTable` (Timecard Grid's Flagged tab): one row per flagged week with Edit / Delete;
+// otherwise grouped by person (Timecard Insights, read-only).
+export function FlaggedResources({ tcRows, tcWeeks, empByName, setNav, onEdit, onDelete, asTable }) {
   const [q, setQ] = useState("");
   const [co, setCo] = useState("All");
   const [since, setSince] = useState(0); // 0 = all weeks, else last N weeks
@@ -27,6 +29,7 @@ export function FlaggedResources({ tcRows, tcWeeks, empByName, setNav, onEdit })
     .filter((p) => p.flags.length)
     .sort((a, b) => b.flags.length - a.flags.length || a.r.name.localeCompare(b.r.name));
   const total = people.reduce((s, p) => s + p.flags.length, 0);
+  const flat = people.flatMap(({ r, flags }) => flags.map((f) => ({ r, ...f }))).sort((a, b) => b.wi - a.wi || a.r.name.localeCompare(b.r.name));
   const companies = [...new Set(tcRows.map((r) => (empByName[r.name] ? empByName[r.name].company : "")).filter(Boolean))].sort();
   return (
     <Card title={"Flagged resources (" + people.length + " people · " + total + " flagged weeks)"} right={
@@ -44,6 +47,37 @@ export function FlaggedResources({ tcRows, tcWeeks, empByName, setNav, onEdit })
     }>
       {people.length === 0 ? (
         <p className="text-sm text-slate-500">No flagged weeks match these filters. Leads and PMs flag outlier weeks from the Timecard Grid (⚑).</p>
+      ) : asTable ? (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
+                <th className="py-2 pr-3">Resource</th><th className="py-2 pr-3">Company</th><th className="py-2 pr-3">Week of</th><th className="py-2 pr-3">SF</th><th className="py-2 pr-3">JIRA</th>
+                <th className="py-2 pr-3">Comment</th><th className="py-2 pr-3">Flagged by</th><th />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {flat.map(({ r, wi, n }) => {
+                const [sf, jira] = r.weeks[wi] || ["", ""];
+                return (
+                  <tr key={r.id + "_" + wi} className="align-top">
+                    <td className="py-2 pr-3 font-medium text-slate-800"><span className="mr-1 text-amber-600">⚑</span>{r.name}</td>
+                    <td className="py-2 pr-3 text-slate-500">{empByName[r.name] ? empByName[r.name].company : "—"}</td>
+                    <td className="py-2 pr-3 whitespace-nowrap">{fmtShort(tcWeeks[wi])}</td>
+                    <td className="py-2 pr-3">{sf ? <Pill tone={TC_COLORS[sf]}>{sf}</Pill> : <span className="text-slate-300">—</span>}</td>
+                    <td className="py-2 pr-3">{jira ? <Pill tone={TC_COLORS[jira]}>{jira}</Pill> : <span className="text-slate-300">—</span>}</td>
+                    <td className="py-2 pr-3 text-slate-700">{n.comment || <span className="text-slate-400">(no comment)</span>}</td>
+                    <td className="py-2 pr-3 whitespace-nowrap text-xs text-slate-500">{n.by}{n.at ? " · " + fmtShort(n.at) : ""}</td>
+                    <td className="py-2 whitespace-nowrap text-right">
+                      {onEdit && <Btn small kind="ghost" onClick={() => onEdit(r, wi)}>Edit</Btn>}
+                      {onDelete && <Btn small kind="danger" onClick={() => onDelete(r, wi)}>Delete</Btn>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       ) : (
         <ul className="divide-y divide-slate-100">
           {people.map(({ r, flags }) => {
@@ -59,7 +93,7 @@ export function FlaggedResources({ tcRows, tcWeeks, empByName, setNav, onEdit })
                 <ul className="ml-6 space-y-1.5">
                   {flags.map(({ wi, n }) => (
                     <li key={wi} className="text-sm">
-                      <span className="font-medium text-slate-600">w/e {fmtShort(tcWeeks[wi])}</span>
+                      <span className="font-medium text-slate-600">week of {fmtShort(tcWeeks[wi])}</span>
                       {(r.weeks[wi] || []).map((v, k) => v && <Pill key={k} tone={"ml-1 " + TC_COLORS[v]}>{(k === 0 ? "SF " : "JIRA ") + v}</Pill>)}
                       <span className="ml-2 text-slate-700">{n.comment || <span className="text-slate-400">(no comment)</span>}</span>
                       <span className="ml-2 text-xs text-slate-400">— {n.by}{n.at ? ", " + fmtShort(n.at) : ""}</span>

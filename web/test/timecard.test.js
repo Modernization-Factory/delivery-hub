@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { excelToISO, parseTimecardGrid, tcStats, tcStatsFlex, tcSuggested, weekCompliance, weekComplianceFlex, weekOutliers } from "../src/lib/timecard.js";
+import { excelToISO, parseTimecardGrid, tcRowsFromDocs, tcStats, tcStatsFlex, tcSuggested, weekCompliance, weekComplianceFlex, weekOutliers } from "../src/lib/timecard.js";
 
 test("tcStats counts cells and excludes N/A from the denominator", () => {
   const s = tcStats([["Proactive", "Proactive"], ["Chased", "N/A"], ["", ""]]);
@@ -112,4 +112,19 @@ test("weekOutliers tallies statuses per week for SF and JIRA, with flags and pro
   assert.equal(t.jira.Completed, 2);
   assert.equal(t.problemPeople, 2); // a (JIRA Chased) and b (SF Not Updated); d's Chased is untracked
   assert.equal(t.flagged, 1);
+});
+
+test("tcRowsFromDocs builds oldest-first weeks with flags, auto N/A and doc ids", () => {
+  const docs = [
+    { _id: "d2", employeeId: "e1", week: "2026-10-25T00:00:00.000Z", sf: "N/A", jira: "N/A", autoNA: ["sf", "jira"] },
+    { _id: "d1", employeeId: "e1", week: "2026-10-18T00:00:00.000Z", sf: "Proactive", jira: null, flag: { comment: "late", by: "Mia", at: "2026-10-20T00:00:00Z" } },
+    { _id: "dx", employeeId: "ghost", week: "2026-10-18T00:00:00.000Z", sf: "Chased" },
+  ];
+  const { weeks, rows, docIds } = tcRowsFromDocs(docs, { e1: "Asha" });
+  assert.deepEqual(weeks, ["2026-10-18", "2026-10-25"]);
+  assert.equal(rows.length, 1); // unknown employee dropped
+  assert.deepEqual(rows[0].weeks, [["Proactive", ""], ["N/A", "N/A"]]);
+  assert.deepEqual(rows[0].autoNA, { 1: ["sf", "jira"] });
+  assert.equal(rows[0].notes[0].comment, "late");
+  assert.equal(docIds.e1["2026-10-25"], "d2");
 });

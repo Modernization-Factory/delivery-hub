@@ -22,7 +22,7 @@ export function TimecardInsights(ctx) {
   function exportExcel() {
     downloadXlsx("timecard-insights.xlsx", [
       ["Per resource", [["Resource", "Company", "Release", "Proactive %", "Proactive", "Chased", "Beyond Monday", "Not Updated", "Partial Updated"], ...scored.map((r) => [r.name, empByName[r.name] ? empByName[r.name].company : "", r.release, r.st.pct, r.st.Proactive, r.st.Chased, r.st["Beyond Monday"], r.st["Not Updated"], r.st["Partial Updated"]])]],
-      ["Weekly compliance", [["Week ending", "Proactive %"], ...weekly.map((w) => [w.w, w.pct === null ? "" : w.pct])]],
+      ["Weekly compliance", [["Week of", "Proactive %"], ...weekly.map((w) => [w.w, w.pct === null ? "" : w.pct])]],
       ["Flagged weeks", flaggedSheet(tcRows, tcWeeks, empByName)],
     ]);
   }
