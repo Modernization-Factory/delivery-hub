@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { LEAVE_COLORS, balancesFor, compOffDateValid, compOffTypeName, leaveColor, findOverlaps, isActiveDuring, isDuplicate, leaveByProjectRole, leaveByMonth, leaveDays, leaveDaysInRange, monthsBetween, onLeaveOn } from "../src/lib/leave.js";
+import { LEAVE_COLORS, balancesFor, compOffDateValid, compOffTypeName, leaveColor, onLeaveWholeWeek, tcWeekDays, findOverlaps, isActiveDuring, isDuplicate, leaveByProjectRole, leaveByMonth, leaveDays, leaveDaysInRange, monthsBetween, onLeaveOn } from "../src/lib/leave.js";
 import { HOLIDAYS, LEAVE_TYPES, NO_HOLIDAYS, WEEKEND } from "./fixtures.js";
 
 test("leaveDays counts working days and applies the type's day value", () => {
@@ -130,4 +130,22 @@ test("leaveColor keeps the original colours and gives renamed types their slot's
   assert.equal(leaveColor("Vacation", types), LEAVE_COLORS.Vacation);
   assert.equal(leaveColor("Medical", types), Object.values(LEAVE_COLORS)[1]);
   assert.equal(leaveColor("Unknown", types), "bg-slate-100 text-slate-600");
+});
+
+test("tcWeekDays: a week dated Sunday covers the Monday-Friday after it, minus holidays", () => {
+  assert.deepEqual(tcWeekDays("2026-10-25", WEEKEND, NO_HOLIDAYS), ["2026-10-26", "2026-10-27", "2026-10-28", "2026-10-29", "2026-10-30"]);
+  assert.deepEqual(tcWeekDays("2026-10-25", WEEKEND, new Set(["2026-10-28"])), ["2026-10-26", "2026-10-27", "2026-10-29", "2026-10-30"]);
+});
+
+test("onLeaveWholeWeek needs every working day covered by full-day leave", () => {
+  const W = "2026-10-25";
+  const L = (start, end, type = "Vacation") => ({ name: "Asha", start, end, type });
+  assert.equal(onLeaveWholeWeek("Asha", W, [L("2026-10-26", "2026-10-30")], LEAVE_TYPES, WEEKEND, NO_HOLIDAYS), true);
+  assert.equal(onLeaveWholeWeek("Asha", W, [L("2026-10-23", "2026-11-03")], LEAVE_TYPES, WEEKEND, NO_HOLIDAYS), true); // spans across
+  assert.equal(onLeaveWholeWeek("Asha", W, [L("2026-10-26", "2026-10-28"), L("2026-10-29", "2026-10-30", "Sick")], LEAVE_TYPES, WEEKEND, NO_HOLIDAYS), true); // two leaves
+  assert.equal(onLeaveWholeWeek("Asha", W, [L("2026-10-26", "2026-10-29")], LEAVE_TYPES, WEEKEND, NO_HOLIDAYS), false); // Friday worked
+  assert.equal(onLeaveWholeWeek("Asha", W, [L("2026-10-26", "2026-10-29")], LEAVE_TYPES, WEEKEND, new Set(["2026-10-30"])), true); // Friday is a holiday
+  assert.equal(onLeaveWholeWeek("Asha", W, [L("2026-10-26", "2026-10-30", "Half Day")], LEAVE_TYPES, WEEKEND, NO_HOLIDAYS), false); // half days aren't absence
+  assert.equal(onLeaveWholeWeek("Asha", W, [L("2026-10-19", "2026-10-23")], LEAVE_TYPES, WEEKEND, NO_HOLIDAYS), false); // the week before
+  assert.equal(onLeaveWholeWeek("Ravi", W, [L("2026-10-26", "2026-10-30")], LEAVE_TYPES, WEEKEND, NO_HOLIDAYS), false); // someone else
 });

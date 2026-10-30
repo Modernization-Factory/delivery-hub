@@ -4,6 +4,7 @@ import { LEAVE_COLORS, leaveColor, balancesFor, compOffTypeName, findOverlaps, i
 import { canDeletePastLeave } from "../lib/permissions.js";
 import { Btn, Card, Field, Notice, Pill, Stat, inputCls } from "../ui/atoms.jsx";
 import { BRAND_FONT } from "../ui/brand.jsx";
+import { LeaveEditForm, canEditLeave } from "../ui/LeaveEditor.jsx";
 
 // ============================================================
 // MY LEAVE (all roles) — submit + own history + balances
@@ -18,6 +19,7 @@ export function MyLeave(ctx) {
   const type = leaveTypes.some((t) => t.name === type0) ? type0 : (leaveTypes[0] ? leaveTypes[0].name : "");
   const [comment, setComment] = useState("");
   const [editNote, setEditNote] = useState(null); // { id, text } while a leave's comment is being edited
+  const [editing, setEditing] = useState(null); // leave id whose dates / type are being edited
   const coName = compOffTypeName(leaveTypes); // labels follow the comp-off type's current name
   const [msg, setMsg] = useState(null);
   const [pendingOverlap, setPendingOverlap] = useState(null);
@@ -125,7 +127,8 @@ export function MyLeave(ctx) {
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {my.map((l) => (
-                  <tr key={l.id}>
+[
+                  <tr key={l.id} className={editing === l.id ? "bg-emerald-50" : ""}>
                     <td className="py-2 pr-4">{fmt(l.start)}{l.start !== l.end ? " → " + fmt(l.end) : ""}</td>
                     <td className="py-2 pr-4"><Pill tone={leaveColor(l.type, ctx.leaveTypes)}>{l.type}</Pill></td>
                     <td className="py-2 pr-4">{leaveDays(l.start, l.end, l.type, leaveTypes, weekendDays, holidaySet)}</td>
@@ -143,10 +146,19 @@ export function MyLeave(ctx) {
                         </span>
                       )}
                     </td>
-                    <td className="py-2 text-right">
+                    <td className="py-2 whitespace-nowrap text-right">
+                      {canEditLeave(l, user, todayISO) && <Btn small kind="ghost" onClick={() => setEditing(editing === l.id ? null : l.id)}>Edit</Btn>}
                       {canDelete(l) && <Btn small kind="danger" onClick={() => remove(l.id)}>Delete</Btn>}
                     </td>
-                  </tr>
+                  </tr>,
+                  editing === l.id && (
+                    <tr key={l.id + "_edit"}><td colSpan={5} className="bg-emerald-50 px-2 py-2">
+                      <LeaveEditForm leave={l} leaveTypes={leaveTypes} user={user} todayISO={todayISO}
+                        onSave={async (p) => { await ctx.updateLeave(l.id, p); setEditing(null); setMsg({ tone: "ok", text: "Leave updated." }); }}
+                        onCancel={() => setEditing(null)} />
+                    </td></tr>
+                  ),
+                  ]
                 ))}
               </tbody>
             </table>

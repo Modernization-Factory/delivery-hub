@@ -83,7 +83,7 @@ export function Dashboard(ctx) {
               {!myTrail ? <span className="text-slate-400">You're not on the timecard grid yet.</span> : (
                 <div className="mt-1 flex flex-wrap gap-1">
                   {myTrail.trail.map((w) => (
-                    <div key={w.week} className="text-center" title={"week ending " + fmt(w.week)}>
+                    <div key={w.week} className="text-center" title={"week of " + fmt(w.week)}>
                       <div className="flex gap-0.5">
                         <span className={"h-3 w-3 rounded-sm " + (TC_COLORS[w.sf || ""] || "").split(" ")[0]} />
                         {w.jira !== null && <span className={"h-3 w-3 rounded-sm " + (TC_COLORS[w.jira || ""] || "").split(" ")[0]} />}
@@ -165,7 +165,7 @@ export function Dashboard(ctx) {
           .sort((a, b) => b.wi - a.wi);
         return (
           <div className="grid gap-5 lg:grid-cols-2">
-            <Card title={"Timecard follow-ups — w/e " + fmtShort(tcWeeks[lastWeekIdx]) + (scope ? " · my team" : "")} right={<Btn kind="ghost" small onClick={() => setNav("timecard")}>Timecard grid</Btn>}>
+            <Card title={"Timecard follow-ups — week of " + fmtShort(tcWeeks[lastWeekIdx]) + (scope ? " · my team" : "")} right={<Btn kind="ghost" small onClick={() => setNav("timecard")}>Timecard grid</Btn>}>
               {lag.length === 0 ? <p className="text-sm text-slate-500">Everyone{scope ? " on your team" : ""} was proactive last week.</p> : (
                 <ul className="divide-y divide-slate-100">
                   {lag.slice(0, 8).map((x) => (
@@ -184,7 +184,7 @@ export function Dashboard(ctx) {
                   {flaggedRecent.slice(0, 6).map(({ r, wi, n }) => (
                     <li key={r.id + wi} className="py-1.5 text-sm">
                       <span className="text-amber-600">⚑</span> <span className="font-medium text-slate-800">{r.name}</span>
-                      <span className="text-xs text-slate-400"> · w/e {fmtShort(tcWeeks[wi])}</span>
+                      <span className="text-xs text-slate-400"> · week of {fmtShort(tcWeeks[wi])}</span>
                       <div className="text-xs text-slate-600">{n.comment || "(no comment)"}</div>
                     </li>
                   ))}
@@ -207,7 +207,7 @@ export function Dashboard(ctx) {
           <>
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
               <Stat label="Open projects" value={projects.length} sub={byRag.Red + " red · " + byRag.Amber + " amber · " + byRag.Green + " green"} />
-              <Stat label="Timecard proactive" value={lastPct === null ? "—" : lastPct + "%"} sub={"org-wide · w/e " + fmtShort(tcWeeks[lastWeekIdx] || todayISO)} />
+              <Stat label="Timecard proactive" value={lastPct === null ? "—" : lastPct + "%"} sub={"org-wide · week of " + fmtShort(tcWeeks[lastWeekIdx] || todayISO)} />
               <Stat label="On leave today" value={onToday.length} sub={leavesBetween(leaves, wkStart, wkEnd).length + " leaves this week"} />
               <Stat label="Active people" value={ctx.employees.length} sub={assignments.filter((a) => a.from <= todayISO && todayISO <= (a.to || "9999-12-31")).map((a) => a.name).filter((n, i, xs) => xs.indexOf(n) === i).length + " allocated today"} />
             </div>

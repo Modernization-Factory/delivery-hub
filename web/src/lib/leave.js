@@ -1,5 +1,5 @@
 import { OPEN_END } from "./constants.js";
-import { isWeekend, isWorkingDay, parseISO } from "./dates.js";
+import { isWeekend, isWorkingDay, parseISO, toISO } from "./dates.js";
 import { runwayRoleOf } from "./roles.js";
 
 // counts working days in [start, end] and multiplies by the leave type's day value
@@ -36,6 +36,28 @@ export function compOffDateValid(dateISO, weekendDays, holidaySet) {
   return isWeekend(d, weekendDays) || holidaySet.has(dateISO);
 }
 
+// Timecard weeks are dated by their Sunday and cover the Monday-Friday that FOLLOWS it
+// (a column dated Sun 25 Oct is the week of Mon 26 - Fri 30 Oct). Returns those working
+// days (weekends and holidays dropped).
+export function tcWeekDays(weekISO, weekendDays, holidaySet) {
+  const d = parseISO(weekISO);
+  const out = [];
+  for (let k = 1; k <= 7; k++) {
+    const x = new Date(d.getFullYear(), d.getMonth(), d.getDate() + k);
+    if (isWorkingDay(x, weekendDays, holidaySet)) out.push(toISO(x));
+  }
+  return out;
+}
+// Is this person away the whole working week? Every working day must be covered by a
+// full-day leave (a 0.5-day type like Half Day doesn't make a day absent). A week with
+// no working days (all holidays) is not "on leave".
+export function onLeaveWholeWeek(name, weekISO, leaves, leaveTypes, weekendDays, holidaySet) {
+  const days = tcWeekDays(weekISO, weekendDays, holidaySet);
+  if (!days.length) return false;
+  const full = (l) => l.name === name && (leaveTypes.find((t) => t.name === l.type) || { value: 1 }).value >= 1;
+  const mine = leaves.filter(full);
+  return days.every((dd) => mine.some((l) => l.start <= dd && dd <= l.end));
+}
 // the leave type that spends comp-off balance: marked in settings, so it survives a rename
 export function compOffTypeName(leaveTypes) {
   const t = leaveTypes.find((x) => x.compOff) || leaveTypes.find((x) => x.name === "Comp-Off");

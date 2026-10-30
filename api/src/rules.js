@@ -56,6 +56,28 @@ function compOffDateValid(dateISO, weekendDays, holidaySet) {
   const d = parseISO(dateISO);
   return isWeekend(d, weekendDays) || holidaySet.has(dateISO);
 }
+// Timecard weeks are dated by their Sunday and cover the Monday-Friday that FOLLOWS it
+// (a column dated Sun 25 Oct is the week of Mon 26 - Fri 30 Oct). Returns those working
+// days (weekends and holidays dropped).
+function tcWeekDays(weekISO, weekendDays, holidaySet) {
+  const d = parseISO(weekISO);
+  const out = [];
+  for (let k = 1; k <= 7; k++) {
+    const x = new Date(d.getFullYear(), d.getMonth(), d.getDate() + k);
+    if (isWorkingDay(x, weekendDays, holidaySet)) out.push(toISO(x));
+  }
+  return out;
+}
+// Is this person away the whole working week? Every working day must be covered by a
+// full-day leave (a 0.5-day type like Half Day doesn't make a day absent). A week with
+// no working days (all holidays) is not "on leave".
+function onLeaveWholeWeek(name, weekISO, leaves, leaveTypes, weekendDays, holidaySet) {
+  const days = tcWeekDays(weekISO, weekendDays, holidaySet);
+  if (!days.length) return false;
+  const full = (l) => l.name === name && (leaveTypes.find((t) => t.name === l.type) || { value: 1 }).value >= 1;
+  const mine = leaves.filter(full);
+  return days.every((dd) => mine.some((l) => l.start <= dd && dd <= l.end));
+}
 // the leave type that spends comp-off balance: marked in settings, so it survives a rename
 function compOffTypeName(leaveTypes) {
   const t = leaveTypes.find((x) => x.compOff) || leaveTypes.find((x) => x.name === "Comp-Off");
@@ -688,7 +710,7 @@ module.exports = {
   TC_STATUSES, METRICS, STREAMS, NAME_ALIASES, PERM_GROUPS, PARTNER_COS, OPEN_END, RUNWAY_ROLES,
   parseISO, toISO, isWeekend, isWorkingDay, workingDaysBetween, monthRange,
   leaveDays, leaveDaysInRange, isDuplicate, findOverlaps, compOffDateValid, balancesFor, onLeaveOn,
-  isActiveDuring, appRoleOf, appRoleForEmp, compOffTypeName, canDeletePastLeave,
+  isActiveDuring, appRoleOf, appRoleForEmp, compOffTypeName, tcWeekDays, onLeaveWholeWeek, canDeletePastLeave,
   tcStats, tcStatsFlex, weekCompliance, weekComplianceFlex, tcSuggested,
   excelToISO, parseTimecardGrid,
   aOverlaps, crossProjectConcurrent, activeAssignmentsOn, effortSplitInMonth, assignmentDaysInMonth, streamsInMonth, currentStream,

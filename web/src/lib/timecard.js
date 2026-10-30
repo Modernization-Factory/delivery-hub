@@ -172,3 +172,28 @@ export const TC_COLORS = {
   "N/A": "bg-slate-100 text-slate-500",
   "": "bg-white text-slate-300",
 };
+
+// Server timecard docs (one per person-week) -> grid rows. Weeks are oldest-first and a row's
+// weeks[i] lines up with weeks[i]; `notes[i]` is the outlier flag, `autoNA[i]` the cells the
+// server set to N/A for a full week of leave. docIds[employeeId][week] -> doc id, for saves.
+export function tcRowsFromDocs(docs, empNameById) {
+  const dstr = (x) => (x ? String(x).slice(0, 10) : null);
+  const weeks = [...new Set(docs.map((d) => dstr(d.week)))].sort();
+  const wIdx = Object.fromEntries(weeks.map((w, i) => [w, i]));
+  const rowsByEmp = {};
+  const docIds = {};
+  docs.forEach((d) => {
+    const eid = String(d.employeeId);
+    const name = empNameById[eid];
+    if (!name) return;
+    const r = (rowsByEmp[eid] = rowsByEmp[eid] || { id: eid, name, release: d.release || "", remarks: d.remarks || "", weeks: weeks.map(() => ["", ""]), notes: {} });
+    if (d.release) r.release = d.release;
+    if (d.remarks) r.remarks = d.remarks;
+    const i = wIdx[dstr(d.week)];
+    r.weeks[i] = [d.sf || "", d.jira || ""];
+    if (d.autoNA && d.autoNA.length) (r.autoNA = r.autoNA || {})[i] = d.autoNA;
+    if (d.flag) r.notes[i] = { comment: d.flag.comment || "", by: d.flag.by || "", at: dstr(d.flag.at) };
+    (docIds[eid] = docIds[eid] || {})[dstr(d.week)] = String(d._id);
+  });
+  return { weeks, rows: Object.values(rowsByEmp).sort((a, b) => a.name.localeCompare(b.name)), docIds };
+}

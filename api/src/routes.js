@@ -103,6 +103,35 @@ router.get("/leaves", async (req, res) => {
   const leaves = await col("leaves").find(q).sort({ start: -1 }).toArray();
   res.json(leaves.map((l) => ({ id: l._id, employeeId: l.employeeId, start: iso(l.start), end: iso(l.end), type: l.type, comment: l.comment || "" })));
 });
+// ---- automatic N/A on timecards for full weeks of leave ----
+// For one person: every timecard week they're entirely on leave gets N/A in each BLANK cell,
+// marked autoNA; an autoNA cell whose leave has gone away goes blank again. Cells someone
+// filled in (including a hand-set N/A) are never touched. Returns the number of cells changed.
+async function syncLeaveNA(employeeId) {
+  const emp = await col("employees").findOne({ _id: employeeId });
+  if (!emp) return 0;
+  const { leaveTypes, weekendDays, holidaySet } = leaveCtx(await settings());
+  const leaves = (await col("leaves").find({ employeeId }).toArray()).map((l) => ({ name: emp.name, start: iso(l.start), end: iso(l.end), type: l.type }));
+  const ops = [];
+  for (const t of await col("timecards").find({ employeeId }).toArray()) {
+    const away = R.onLeaveWholeWeek(emp.name, iso(t.week), leaves, leaveTypes, weekendDays, holidaySet);
+    const set = {}, unset = {};
+    for (const k of ["sf", "jira"]) {
+      const auto = (t.autoNA || []).includes(k);
+      if (away && !t[k]) { set[k] = "N/A"; }
+      else if (!away && auto && t[k] === "N/A") { set[k] = null; }
+    }
+    if (!Object.keys(set).length) continue;
+    const autoNA = [...new Set([...(t.autoNA || []).filter((k) => !(k in set) || set[k] === "N/A"), ...Object.keys(set).filter((k) => set[k] === "N/A")])];
+    const update = { $set: { ...set, updatedAt: new Date(), updatedBy: "auto (leave)" } };
+    if (autoNA.length) update.$set.autoNA = autoNA; else unset.autoNA = "";
+    if (Object.keys(unset).length) update.$unset = unset;
+    ops.push({ updateOne: { filter: { _id: t._id }, update } });
+  }
+  if (ops.length) await col("timecards").bulkWrite(ops, { ordered: false });
+  return ops.length;
+}
+
 router.post("/leaves", audit("leave.create"), async (req, res) => {
   const { employeeId, start, end, type, force } = req.body;
   const comment = String(req.body.comment || "").trim().slice(0, 300);
@@ -125,7 +154,38 @@ router.post("/leaves", audit("leave.create"), async (req, res) => {
   const overlaps = R.findOverlaps(existing, entry);
   if (overlaps.length && !force) return res.status(409).json({ error: "overlap", overlaps });
   await col("leaves").insertOne({ employeeId: target._id, start: day(start), end: day(end), type, ...(comment ? { comment } : {}), createdAt: new Date(), createdBy: req.user.employee.name });
-  res.status(201).json({ ok: true, days, warnings: overlaps.length ? ["overlap_saved"] : [] });
+  const autoNA = await syncLeaveNA(target._id);
+  res.status(201).json({ ok: true, days, autoNA, warnings: overlaps.length ? ["overlap_saved"] : [] });
+});
+// Edit a leave's dates / type / comment. PM + Admin: any leave, any time. Everyone else: their
+// own leave only, and only while it hasn't started (and not into the past). The same checks as
+// filing apply; timecard N/A is recalculated so it follows the leave.
+router.put("/leaves/:id", audit("leave.update"), async (req, res) => {
+  const l = await col("leaves").findOne({ _id: new ObjectId(req.params.id) });
+  if (!l) return res.status(404).json({ error: "not_found" });
+  const today = R.toISO(new Date());
+  const own = String(l.employeeId) === String(req.user.employee._id);
+  const manager = R.canDeletePastLeave(req.user.role); // PM / Admin
+  if (!manager) {
+    if (!own) return res.status(403).json({ error: "forbidden", detail: "Only a PM or Admin can edit someone else's leave." });
+    if (iso(l.start) < today) return res.status(403).json({ error: "leave_started", detail: "This leave has already started — ask a PM or Admin to change it." });
+  }
+  const start = req.body.start || iso(l.start), end = req.body.end || iso(l.end), type = req.body.type || l.type;
+  const comment = req.body.comment !== undefined ? String(req.body.comment || "").trim().slice(0, 300) : (l.comment || "");
+  if (!start || !end || end < start) return res.status(422).json({ error: "invalid_dates" });
+  if (!manager && start < today) return res.status(422).json({ error: "start_in_past", detail: "You can only move your leave to today or later." });
+  const { leaveTypes, weekendDays, holidaySet } = leaveCtx(await settings());
+  if (!leaveTypes.some((t) => t.name === type)) return res.status(422).json({ error: "unknown_leave_type", detail: "\"" + type + "\" isn't a configured leave type." });
+  if (R.leaveDays(start, end, type, leaveTypes, weekendDays, holidaySet) === 0) return res.status(422).json({ error: "no_working_days" });
+  const emp = await col("employees").findOne({ _id: l.employeeId });
+  const others = (await col("leaves").find({ employeeId: l.employeeId, _id: { $ne: l._id } }).toArray()).map((x) => ({ id: String(x._id), name: emp.name, start: iso(x.start), end: iso(x.end), type: x.type }));
+  const entry = { name: emp.name, start, end, type };
+  if (R.isDuplicate(others, entry)) return res.status(409).json({ error: "duplicate", detail: "An identical leave already exists." });
+  const overlaps = R.findOverlaps(others, entry);
+  if (overlaps.length && !req.body.force) return res.status(409).json({ error: "overlap", overlaps });
+  await col("leaves").updateOne({ _id: l._id }, { $set: { start: day(start), end: day(end), type, updatedAt: new Date(), updatedBy: req.user.employee.name, ...(comment ? { comment } : {}) }, ...(comment ? {} : { $unset: { comment: "" } }) });
+  const autoNA = await syncLeaveNA(l.employeeId);
+  res.json({ ok: true, autoNA, warnings: overlaps.length ? ["overlap_saved"] : [] });
 });
 router.patch("/leaves/:id/comment", audit("leave.comment"), async (req, res) => {
   const l = await col("leaves").findOne({ _id: new ObjectId(req.params.id) });
@@ -143,7 +203,8 @@ router.delete("/leaves/:id", audit("leave.delete"), async (req, res) => {
   if (!own && !req.can("leave.forAnyone")) return res.status(403).json({ error: "forbidden" });
   if (R.toISO(l.start) < R.toISO(new Date()) && !R.canDeletePastLeave(req.user.role)) return res.status(403).json({ error: "past_leave_locked", detail: "Leave that has already started can only be deleted by a PM or Admin." });
   await col("leaves").deleteOne({ _id: l._id });
-  res.json({ ok: true });
+  const autoNA = await syncLeaveNA(l.employeeId);
+  res.json({ ok: true, autoNA });
 });
 
 // ---------- comp-off ----------
@@ -185,7 +246,7 @@ router.put("/timecards/:id", requireCap("timecard.editAll"), audit("timecard.upd
   const { sf, jira } = req.body;
   const valid = (v) => v === null || v === "" || R.TC_STATUSES.includes(v);
   if (!valid(sf) || !valid(jira)) return res.status(422).json({ error: "invalid_status" });
-  await col("timecards").updateOne({ _id: new ObjectId(req.params.id) }, { $set: { sf: sf || null, jira: jira || null, updatedAt: new Date(), updatedBy: req.user.employee.name, source: "manual" } });
+  await col("timecards").updateOne({ _id: new ObjectId(req.params.id) }, { $set: { sf: sf || null, jira: jira || null, updatedAt: new Date(), updatedBy: req.user.employee.name, source: "manual" }, $unset: { autoNA: "" } });
   res.json({ ok: true });
 });
 // outlier flag + comment on one person-week; kept separate from sf/jira so a sheet re-import never clears it
@@ -207,6 +268,7 @@ router.post("/timecards/weeks", requireCap("timecard.editAll"), audit("timecard.
   const people = await col("timecards").distinct("employeeId", { employeeId: { $nin: inactiveIds } });
   if (people.length) {
     await col("timecards").insertMany(people.map((employeeId) => ({ employeeId, week: day(next), sf: null, jira: null, updatedAt: new Date(), updatedBy: req.user.employee.name, source: "manual" })), { ordered: false });
+    for (const employeeId of people) await syncLeaveNA(employeeId); // full-week leave -> N/A from the start
   }
   res.status(201).json({ ok: true, week: next, rows: people.length });
 });
@@ -591,7 +653,11 @@ router.put("/settings", requireCap("settings.edit"), audit("settings.update"), a
     if (extLinks.some((l) => !/^https?:\/\//.test(l.url || ""))) return res.status(422).json({ error: "invalid_link_url" });
     $set.extLinks = extLinks;
   }
+  const before = await settings();
   await col("settings").updateOne({ _id: "global" }, { $set });
+  // leave types, weekends or holidays decide what a "full week of leave" is — resync N/A when they change
+  const leaveRulesChanged = leaveTypes !== undefined && JSON.stringify([before.leaveTypes, before.weekendDays, (before.holidays || []).map(iso)]) !== JSON.stringify([leaveTypes, weekendDays, (holidays || []).map((h) => String(h).slice(0, 10))]);
+  if (leaveRulesChanged) for (const id of await col("leaves").distinct("employeeId")) await syncLeaveNA(id);
   res.json({ ok: true });
 });
 // Rename a leave type everywhere: the settings entry and every leave recorded under the old

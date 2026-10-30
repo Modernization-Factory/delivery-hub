@@ -3,6 +3,7 @@ import { api, setIdentity, getIdentity } from "./api";
 import { LayoutDashboard, Plane, CalendarDays, ListChecks, BarChart3, Clock, Table, TrendingUp, GitBranch, FolderKanban, Gauge, Hourglass, Users, Settings as SettingsIcon, Shield, Lock, ExternalLink, ClipboardList, Activity } from "lucide-react";
 import { activeAssignmentsOn } from "./lib/allocations.js";
 import { MODULES_V2 } from "./lib/constants.js";
+import { tcRowsFromDocs } from "./lib/timecard.js";
 import { toISO } from "./lib/dates.js";
 import { canDo, defaultPerms, mergePerms } from "./lib/permissions.js";
 import { PageLoading, useBackgroundRefresh } from "./ui/useBackgroundRefresh.jsx";
@@ -73,23 +74,9 @@ export default function App() {
   }
   async function loadTimecards(empNameById) {
     const docs = await api("/timecards").catch((e) => (e.status === 403 ? api("/timecards?mine=1") : Promise.reject(e)));
-    const weeks = [...new Set(docs.map((d) => dstr(d.week)))].sort();
-    const wIdx = Object.fromEntries(weeks.map((w, i) => [w, i]));
-    const rowsByEmp = {};
-    const docIds = {};
-    docs.forEach((d) => {
-      const eid2 = String(d.employeeId);
-      const name = empNameById[eid2];
-      if (!name) return;
-      const r = (rowsByEmp[eid2] = rowsByEmp[eid2] || { id: eid2, name, release: d.release || "", remarks: d.remarks || "", weeks: weeks.map(() => ["", ""]), notes: {} });
-      if (d.release) r.release = d.release;
-      if (d.remarks) r.remarks = d.remarks;
-      r.weeks[wIdx[dstr(d.week)]] = [d.sf || "", d.jira || ""];
-      if (d.flag) r.notes[wIdx[dstr(d.week)]] = { comment: d.flag.comment || "", by: d.flag.by || "", at: dstr(d.flag.at) };
-      (docIds[eid2] = docIds[eid2] || {})[dstr(d.week)] = String(d._id);
-    });
+    const { weeks, rows, docIds } = tcRowsFromDocs(docs, empNameById);
     setTcWeeks0(weeks);
-    setTcRows0(Object.values(rowsByEmp).sort((a, b) => a.name.localeCompare(b.name)));
+    setTcRows0(rows);
     setSrvMaps((m) => ({ ...m, tcDocIds: docIds }));
   }
   async function loadProjects() {
@@ -178,13 +165,22 @@ export default function App() {
   }
   const eid = (name) => srvMaps.empIdByName[name];
 
+  // a leave change can set or clear automatic N/A on that person's timecard weeks
+  const afterLeaveChange = (r) => { if (r && r.autoNA && lastFetched.current.timecards) return loadTimecards(empNameByIdNow()); };
   const setLeaves = (next) => {
     const prev = leaves; setLeaves0(next);
     diffSync(prev, next, {
-      create: (l) => fire("/leaves", api("/leaves", { method: "POST", body: { employeeId: eid(l.name), start: l.start, end: l.end, type: l.type, comment: l.comment || "", force: true } }).then(() => loadLeaves(empNameByIdNow()))),
-      remove: (l) => fire("/leaves", api("/leaves/" + l.id, { method: "DELETE" })),
+      create: (l) => fire("/leaves", api("/leaves", { method: "POST", body: { employeeId: eid(l.name), start: l.start, end: l.end, type: l.type, comment: l.comment || "", force: true } }).then((r) => Promise.all([loadLeaves(empNameByIdNow()), afterLeaveChange(r)]))),
+      remove: (l) => fire("/leaves", api("/leaves/" + l.id, { method: "DELETE" }).then(afterLeaveChange)),
     });
   };
+  // edit dates / type / comment; the server enforces who may (PM/Admin any; owner before it starts)
+  async function updateLeave(id, patch) {
+    const r = await api("/leaves/" + id, { method: "PUT", body: { ...patch, force: true } });
+    setLeaves0((ls) => ls.map((l) => (l.id === id ? { ...l, ...patch } : l)));
+    await afterLeaveChange(r);
+    return r;
+  }
   const setComps = (next) => {
     const prev = comps; setComps0(next);
     diffSync(prev, next, {
@@ -482,7 +478,7 @@ export default function App() {
     setTcWeeks, assignments, setAssignments, projects: openProjects, allProjects: projects, setProjects, setProjectClosed, jiraFlags,
     scores, setScores, perfCfg, setPerfCfg, can, perms, setPerms, extLinks, setExtLinks, plans, setPlans, empFields, setEmpFields, raid, setRaid, milestones, setMilestones, weeklyHealth, setWeeklyHealth, pipeline, setPipeline, uploadTimecardFile, setTcFlag,
     todayISO, canManage, canConfigure, isDev, isAdmin,
-    setLeaves, setLeaveComment, setComps, setTcRows, setEmployees, setLeaveTypes, renameLeaveType, setWeekendDays, setHolidays, nextId, setNav, setEmployeeAdmin,
+    setLeaves, setLeaveComment, updateLeave, setComps, setTcRows, setEmployees, setLeaveTypes, renameLeaveType, setWeekendDays, setHolidays, nextId, setNav, setEmployeeAdmin,
   };
 
   return (
