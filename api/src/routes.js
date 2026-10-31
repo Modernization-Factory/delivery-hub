@@ -404,7 +404,7 @@ router.get("/burn", requireCap("alloc.view"), async (req, res) => {
   res.json(R.computeBurn(assignments, emps, empByName, year, weekendDays, holidaySet));
 });
 
-router.get("/runway", requireCap("runway.view"), async (_req, res) => {
+router.get("/runway", requireCap("runway.view"), async (req, res) => {
   const s = await settings();
   const { leaveTypes, weekendDays, holidaySet } = leaveCtx(s);
   const employees = await col("employees").find().toArray();
@@ -414,7 +414,9 @@ router.get("/runway", requireCap("runway.view"), async (_req, res) => {
   const leaves = (await col("leaves").find().toArray()).map((l) => ({ name: nameById[String(l.employeeId)], start: iso(l.start), end: iso(l.end), type: l.type }));
   const projects = await col("projects").find({ closedAt: null }).toArray();
   const today = R.toISO(new Date());
-  res.json(projects.map((p) => ({ projectId: p._id, name: p.name, runway: R.computeRunway({ id: String(p._id), funding: p.funding }, empByName, assignments, leaves, leaveTypes, weekendDays, holidaySet, today) })));
+  // ?from=YYYY-MM-DD projects from another date; default today
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(req.query.from || "") ? req.query.from : today;
+  res.json(projects.map((p) => ({ projectId: p._id, name: p.name, runway: R.computeRunway({ id: String(p._id), funding: p.funding }, empByName, assignments, leaves, leaveTypes, weekendDays, holidaySet, today, from) })));
 });
 
 router.get("/reports/leave-project-role", requireCap("leave.reports"), async (req, res) => {

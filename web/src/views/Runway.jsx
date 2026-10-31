@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { fmt, weekAnchor } from "../lib/dates.js";
+import { fmt, fmtShort } from "../lib/dates.js";
 import { RUNWAY_ROLES } from "../lib/roles.js";
 import { computeRunway, runwaySummary } from "../lib/runway.js";
 import { downloadXlsx } from "../lib/xlsx.js";
@@ -20,10 +20,11 @@ export function RunwayView(ctx) {
   const r1 = (x) => Math.round(x * 10) / 10;
   const r2 = (x) => Math.round(x * 100) / 100;
   const RAG_TONE = { Green: "bg-emerald-100 text-emerald-800", Amber: "bg-amber-100 text-amber-800", Red: "bg-red-100 text-red-800" };
-  const anchor = weekAnchor(todayISO);
+  const [from0, setFrom] = useState(""); // projection date; blank = today (so it follows the date day to day)
+  const from = from0 || todayISO;
 
   const all = projects.map((p) => {
-    const rw = computeRunway(p, empByName, assignments, leaves, leaveTypes, weekendDays, holidaySet, todayISO);
+    const rw = computeRunway(p, empByName, assignments, leaves, leaveTypes, weekendDays, holidaySet, todayISO, from);
     return { p, rw, sum: runwaySummary(rw) };
   });
   const funded = all.filter((x) => x.rw);
@@ -51,7 +52,7 @@ export function RunwayView(ctx) {
   function startEdit(p) {
     const fd = p.funding || {};
     setEditId(p.id);
-    setF({ start: fd.start || todayISO, hours: { ...(fd.hours || {}) }, overrides: { ...(fd.overrides || {}) } });
+    setF({ start: fd.start || todayISO, hours: { ...(fd.hours || {}) }, overrides: { ...(fd.overrides || {}) }, asOf: fd.overridesAsOf || fd.start || todayISO, asOfTouched: false });
   }
   function saveFunding(p) {
     setMsg(null);
@@ -62,7 +63,11 @@ export function RunwayView(ctx) {
       hours[r] = Number(f.hours[r]) || 0;
       overrides[r] = f.overrides[r] === "" || f.overrides[r] === null || f.overrides[r] === undefined ? null : Number(f.overrides[r]);
     });
-    setProjects(projects.map((x) => (x.id === p.id ? { ...x, funding: { start: f.start, hours, overrides } } : x)));
+    // a changed override is a balance as of today unless the "as of" date was set by hand
+    const prev = (p.funding && p.funding.overrides) || {};
+    const changed = RUNWAY_ROLES.some((r) => (prev[r] ?? null) !== overrides[r]);
+    const overridesAsOf = f.asOfTouched ? f.asOf : changed ? todayISO : (p.funding && p.funding.overridesAsOf) || f.start;
+    setProjects(projects.map((x) => (x.id === p.id ? { ...x, funding: { start: f.start, hours, overrides, overridesAsOf } } : x)));
     setEditId(null);
     setMsg({ tone: "ok", text: "Funding saved for " + p.name + " — runway recalculated." });
   }
@@ -78,7 +83,9 @@ export function RunwayView(ctx) {
         ))}
       </div>
       <div className="mt-2 grid gap-3 sm:grid-cols-5">
-        <div className="self-end pb-2 text-xs text-slate-500">Remaining overrides (blank = derived from consumption):</div>
+        <Field label="Overrides are the balance as of">
+          <input type="date" className={inputCls} value={f.asOf} onChange={(e) => setF({ ...f, asOf: e.target.value, asOfTouched: true })} />
+        </Field>
         {RUNWAY_ROLES.map((r) => (
           <Field key={r} label={r + " remaining override"}>
             <input type="number" min="0" className={inputCls} placeholder="derived" value={f.overrides[r] ?? ""} onChange={(e) => setF({ ...f, overrides: { ...f.overrides, [r]: e.target.value } })} />
@@ -89,13 +96,20 @@ export function RunwayView(ctx) {
     </div>
   );
 
+  const lastLabel = (r) => r.last
+    ? <span>{fmt(r.last)}{r.beyondAssignments && <span className="ml-1 text-xs font-normal text-amber-700" title={"Assignments end " + fmt(r.assignmentsEnd) + " with " + r.leftAtAssignmentsEnd + " h unused; this date assumes the people assigned then carry on"}>⚠ after assignments end {fmtShort(r.assignmentsEnd)}</span>}</span>
+    : r.total && !r.remaining ? <span className="text-red-600">used up</span> : "—";
   const weeksLabel = (w) => (w === null || w === undefined ? "—" : r2(w) + " wk");
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-xl font-semibold text-slate-900" style={{ fontFamily: BRAND_FONT }}>Remaining Runway</h2>
-        <span className="text-xs text-slate-500">Week anchor: {fmt(anchor)} · consumed at 8 h per working day, day-weighted across concurrent projects · last dates skip weekends & the {holidaySet.size} configured holidays and are extended by approved leave</span>
+        <span className="flex flex-wrap items-center gap-2 text-sm text-slate-600">
+          Project from
+          <input type="date" className={inputCls + " w-40"} value={from} onChange={(e) => setFrom(e.target.value === todayISO ? "" : e.target.value)} />
+          {from0 && <Btn small kind="ghost" onClick={() => setFrom("")}>Today</Btn>}
+        </span>
       </div>
       {msg && <Notice tone={msg.tone === "error" ? "error" : "ok"}>{msg.text}</Notice>}
 
@@ -211,8 +225,8 @@ export function RunwayView(ctx) {
                       <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
                         <th className="py-2 pr-3">Role</th><th className="py-2 pr-3 text-right">Headcount</th><th className="py-2 pr-3 text-right">Burn / wk (h)</th>
                         <th className="py-2 pr-3 text-right">Total billable</th><th className="py-2 pr-3 text-right">Consumed</th><th className="py-2 pr-3 text-right">Remaining</th>
-                        <th className="py-2 pr-3 text-right">Weeks</th><th className="py-2 pr-3 text-right">Days</th><th className="py-2 pr-3">Last date</th>
-                        <th className="py-2 pr-3 text-right">Leave adj</th><th className="py-2 pr-3">RAG</th>
+                        <th className="py-2 pr-3 text-right">Weeks</th><th className="py-2 pr-3 text-right">Working days</th><th className="py-2 pr-3">Last date</th>
+                        <th className="py-2 pr-3 text-right">Lost to leave</th><th className="py-2 pr-3 text-right">Holidays</th><th className="py-2 pr-3">RAG</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -223,11 +237,12 @@ export function RunwayView(ctx) {
                           <td className="py-1.5 pr-3 text-right">{r.weeklyBurn ? Math.round(r.weeklyBurn * 10) / 10 : "—"}</td>
                           <td className="py-1.5 pr-3 text-right">{r.total || "—"}</td>
                           <td className="py-1.5 pr-3 text-right text-slate-500">{r.consumed || "—"}</td>
-                          <td className="py-1.5 pr-3 text-right font-semibold">{r1(r.remaining)}{r.override !== null && <Pill tone="ml-1 bg-purple-100 text-purple-800">override</Pill>}</td>
+                          <td className="py-1.5 pr-3 text-right font-semibold">{r1(r.remaining)}{r.override !== null && <Pill tone="ml-1 bg-purple-100 text-purple-800" title={r.overrideAsOf ? r.override + " h as of " + fmt(r.overrideAsOf) + "; hours burnt since then are deducted" : ""}>override</Pill>}</td>
                           <td className="py-1.5 pr-3 text-right font-semibold">{r.weeks === null ? "—" : r2(r.weeks)}</td>
-                          <td className="py-1.5 pr-3 text-right">{r.days === null ? "—" : r1(r.days)}</td>
-                          <td className="py-1.5 pr-3 font-medium">{r.last ? fmt(r.last) : "—"}</td>
-                          <td className="py-1.5 pr-3 text-right text-slate-500">{r.leaveAdj ? "+" + r1(r.leaveAdj) + " d" : "—"}</td>
+                          <td className="py-1.5 pr-3 text-right">{r.days ? r.days : "—"}</td>
+                          <td className="py-1.5 pr-3 font-medium">{lastLabel(r)}</td>
+                          <td className="py-1.5 pr-3 text-right text-slate-500">{r.leaveHours ? r1(r.leaveHours) + " h" : "—"}</td>
+                          <td className="py-1.5 pr-3 text-right text-slate-500">{r.holidays || "—"}</td>
                           <td className="py-1.5 pr-3">{r.rag ? <Pill tone={RAG_TONE[r.rag]}>{r.rag}</Pill> : "—"}</td>
                         </tr>
                       ))}
@@ -238,11 +253,11 @@ export function RunwayView(ctx) {
                         <td className="py-2 pr-3 text-right">{r1(rw.totalRemaining)}</td>
                         <td colSpan={2} />
                         <td className="py-2 pr-3">{rw.end ? "ends " + fmt(rw.end) : "—"}</td>
-                        <td colSpan={2} />
+                        <td colSpan={3} />
                       </tr>
                     </tbody>
                   </table>
-                  <p className="mt-2 text-xs text-slate-400">Weeks = remaining ÷ weekly burn (per-assignment hours honoured, default 40). RAG: Green ≥ 4 weeks, Amber ≥ 2. Leave adj = approved leave of the role's team inside the runway window, extending the last date — computed from real leave records, not a manual forecast.</p>
+                  <p className="mt-2 text-xs text-slate-400">Projected day by day from {fmt(from)}: each working day every assigned person burns 8 h × (weekly hours ÷ 40), split across concurrent projects. Weekends, holidays and each person's own leave burn nothing (Half Day burns half), so leave delays the date by the hours actually lost, not by whole team-days. The last date is when remaining hours run out; if the role's assignments end first, the people assigned on that day are assumed to carry on and the date is marked ⚠. Consumed counts from the funding start to the day before the projection date. A remaining override is the balance on its "as of" date; hours burnt since then are deducted, so dates don't drift day to day. Weeks = working days ÷ 5. RAG: Green ≥ 4 weeks, Amber ≥ 2.</p>
                 </div>
               )}
             </Card>
