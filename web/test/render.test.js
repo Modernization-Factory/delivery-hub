@@ -71,10 +71,19 @@ test("a flagged team manager doesn't get project burn or whole-team timecard act
   const alloc = harness.renderScreen("AllocationsViewAsTeamManager");
   assert.ok(!alloc.includes("Projected Burn"), "Projected Burn hidden");
   assert.ok(alloc.includes("Roster"), "Plan / Roster stay");
-  const lead = harness.renderScreen("TimecardGridAsLead");
-  assert.ok(lead.includes("Import weekly file") && lead.includes("Add week"), "an unflagged Lead keeps import / add week");
   const tm = harness.renderScreen("TimecardGridAsTeamManager");
-  assert.ok(!tm.includes("Import weekly file") && !tm.includes("Add week"), "a flagged Lead loses import / add week");
+  assert.ok(!tm.includes("Import weekly file") && !tm.includes("Add week"), "a flagged Lead has no import / add week");
+});
+
+// Only PMs and Admins change timecards — a Lead sees the grid but can't import, add a week or edit.
+test("timecard import / add week / editing are PM and Admin only", () => {
+  const pm = harness.renderScreen("TimecardGridAsPM");
+  assert.ok(pm.includes("Import weekly file") && pm.includes("Add week"), "a PM imports and adds weeks");
+  // the status cells are the only selects styled "cursor-pointer appearance-none"
+  assert.ok(pm.includes("cursor-pointer appearance-none"), "a PM gets editable status cells");
+  const lead = harness.renderScreen("TimecardGridAsLead");
+  assert.ok(lead.includes("Timecard") && !lead.includes("Import weekly file") && !lead.includes("Add week"), "a Lead sees the grid but can't import or add a week");
+  assert.ok(!lead.includes("cursor-pointer appearance-none"), "a Lead gets no editable status cells");
 });
 
 test("the permission matrix shows the Team Manager column", () => {

@@ -395,6 +395,19 @@ Two consequences worth holding onto:
 Merge to `main`; Drone builds a new image tag and rolls the deployment. Application data lives entirely in MongoDB; no build step touches it, and
 no seed script should be re-run on an established database.
 
+**One-off: timecard editing is PM and Admin only.** Editing timecard statuses, importing
+the weekly file, adding a week and flagging outlier weeks now default to PM (Admin always
+has everything). A permission matrix already saved in Administration keeps its old ticks,
+so run this once per environment after deploying — it unticks every other role for
+`timecard.editAll` and `timecard.flag`, leaves all other capabilities as stored, and is
+safe to re-run:
+
+```bash
+cd api
+MONGODB_URI="<atlas-uri>" DB_NAME="deliveryhub" node scripts/reset-timecard-edit-perms.js           # dry run: lists the changes
+MONGODB_URI="<atlas-uri>" DB_NAME="deliveryhub" node scripts/reset-timecard-edit-perms.js --write
+```
+
 ---
 
 ## 6. Integration API (read-only)

@@ -117,6 +117,7 @@ export const SCREENS = {
   AllocationsViewAsViewer: () => AllocationsView(asRole("Vic", "Viewer")),
   AllocationsViewAsTeamManager: () => AllocationsView(asManager("Ravi", "Lead")),
   TimecardGridAsLead: () => TimecardGrid(asRole("Ravi", "Lead")),
+  TimecardGridAsPM: () => TimecardGrid(asRole("Mia", "Project Manager")),
   TimecardGridAsTeamManager: () => TimecardGrid(asManager("Ravi", "Lead")),
   DashboardTeamManager: () => Dashboard(asManager("Asha", "Developer")),
   AllocationsWorkingDays: () => WorkingDaysReport(ctx),

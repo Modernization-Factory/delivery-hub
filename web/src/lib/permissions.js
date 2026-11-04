@@ -13,9 +13,9 @@ export const PERM_GROUPS = [
     ["settings.edit", "Leave settings (types · weekends · holidays)", { D: 0, L: 0, P: 1, V: 0, M: 0 }],
   ]},
   { module: "Timecard", caps: [
-    ["timecard.editAll", "Edit full grid · import weekly file · add weeks", { D: 0, L: 1, P: 1, V: 0, M: 0 }],
+    ["timecard.editAll", "Edit full grid · import weekly file · add weeks", { D: 0, L: 0, P: 1, V: 0, M: 0 }],
     ["timecard.insights", "Timecard insights & compliance", { D: 0, L: 1, P: 1, V: 1, M: 1 }],
-    ["timecard.flag", "Flag outlier weeks & comment on them", { D: 0, L: 1, P: 1, V: 0, M: 0 }],
+    ["timecard.flag", "Flag outlier weeks & comment on them", { D: 0, L: 0, P: 1, V: 0, M: 0 }],
   ]},
   { module: "Allocations & Projects", caps: [
     ["alloc.view", "View allocations (plan · roster · burn)", { D: 0, L: 1, P: 1, V: 1, M: 1 }],
