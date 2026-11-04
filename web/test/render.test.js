@@ -41,6 +41,21 @@ test("the Working Days by-type split lists a leave type that isn't in settings",
   assert.ok(html.includes("not in settings"), "and be labelled as off-list");
 });
 
+// Developers log their own comp-off; they must never see another person's entry or the
+// controls for managing everyone's (company filter, name search, employee picker).
+test("a Developer / Senior Developer comp-off page shows only their own entries", () => {
+  for (const screen of ["CompOffLogDeveloper", "CompOffLogSeniorDev"]) {
+    const html = harness.renderScreen(screen);
+    assert.ok(html.includes("My Comp-Off"), screen + ": own-only heading");
+    assert.ok(html.includes("release"), screen + ": their own entry is listed");
+    assert.ok(!html.includes("ravi-weekend") && !html.includes("Ravi"), screen + ": someone else's entry leaked");
+    assert.ok(!html.includes("All companies") && !html.includes("Search name"), screen + ": ledger filters shown");
+    assert.ok(!html.includes(">Employee<"), screen + ": employee picker / column shown");
+  }
+  const pm = harness.renderScreen("CompOffLog");
+  assert.ok(pm.includes("Comp-Off Earned") && pm.includes("All companies") && pm.includes(">Employee<"), "a PM keeps the full ledger");
+});
+
 test("the harness covers every screen module in src/views", async () => {
   const fs = await import("node:fs");
   const views = fs.readdirSync(path.join(root, "src/views")).filter((f) => f.endsWith(".jsx"));

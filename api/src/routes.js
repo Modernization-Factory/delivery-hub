@@ -215,21 +215,34 @@ router.get("/compoffs", async (req, res) => {
   const q = mine ? { employeeId: req.user.employee._id } : {};
   res.json(await col("compOffs").find(q).sort({ dateWorked: -1 }).toArray());
 });
-router.post("/compoffs", requireCap("leave.compoff"), audit("compoff.create"), async (req, res) => {
-  const { employeeId, dateWorked, days, reason } = req.body;
-  if (await col("employees").findOne({ _id: new ObjectId(employeeId), inactive: true })) return res.status(422).json({ error: "employee_inactive" });
+// Own comp-off needs leave.compoffOwn; anyone else's needs leave.compoff (the full ledger).
+// Someone logging only their own can't date it in the future — the day has to have been worked.
+router.post("/compoffs", audit("compoff.create"), async (req, res) => {
+  const { employeeId, dateWorked, reason } = req.body;
+  const days = Number(req.body.days);
+  const self = !employeeId || String(employeeId) === String(req.user.employee._id);
+  if (!R.canLogCompOff(req.can, self)) return res.status(403).json({ error: "forbidden" });
+  const targetId = self ? req.user.employee._id : oid(employeeId);
+  if (await col("employees").findOne({ _id: targetId, inactive: true })) return res.status(422).json({ error: "employee_inactive" });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dateWorked || ""))) return res.status(422).json({ error: "invalid_date" });
+  if (days !== 1 && days !== 0.5) return res.status(422).json({ error: "invalid_days", detail: "Earned days must be 1 or 0.5." });
+  if (!req.can("leave.compoff") && dateWorked > R.toISO(new Date())) return res.status(422).json({ error: "future_date", detail: "Comp-off can only be logged for a day already worked." });
   const s = await settings();
   const { weekendDays, holidaySet } = leaveCtx(s);
   if (!R.compOffDateValid(dateWorked, weekendDays, holidaySet)) return res.status(422).json({ error: "not_weekend_or_holiday" });
   try {
-    await col("compOffs").insertOne({ employeeId: new ObjectId(employeeId), dateWorked: day(dateWorked), days: Number(days), reason: reason || null, createdAt: new Date(), createdBy: req.user.employee.name });
+    await col("compOffs").insertOne({ employeeId: targetId, dateWorked: day(dateWorked), days, reason: reason || null, createdAt: new Date(), createdBy: req.user.employee.name });
   } catch (e) {
     return res.status(409).json({ error: "duplicate_entry" });
   }
   res.status(201).json({ ok: true });
 });
-router.delete("/compoffs/:id", requireCap("leave.compoff"), audit("compoff.delete"), async (req, res) => {
-  await col("compOffs").deleteOne({ _id: new ObjectId(req.params.id) });
+router.delete("/compoffs/:id", audit("compoff.delete"), async (req, res) => {
+  const c = await col("compOffs").findOne({ _id: oid(req.params.id) });
+  if (!c) return res.status(404).json({ error: "not_found" });
+  const own = String(c.employeeId) === String(req.user.employee._id);
+  if (!R.canLogCompOff(req.can, own)) return res.status(403).json({ error: "forbidden" });
+  await col("compOffs").deleteOne({ _id: c._id });
   res.json({ ok: true });
 });
 

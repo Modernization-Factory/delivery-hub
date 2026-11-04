@@ -92,6 +92,9 @@ export const SCREENS = {
   LeaveByResource: () => LeaveMonthly({ ...ctx, mode: "resource" }),
   FlaggedResources: () => FlaggedResources({ ...ctx, onEdit: noop }),
   CompOffLog: () => CompOffLog(ctx),
+  // a Developer's own-only view, fed a list that (wrongly) also holds someone else's entry
+  CompOffLogDeveloper: () => CompOffLog({ ...asRole("Asha", "Developer"), comps: [...ctx.comps, { id: "c1", name: "Ravi", date: "2026-07-11", days: 1, reason: "ravi-weekend" }] }),
+  CompOffLogSeniorDev: () => CompOffLog({ ...asRole("Asha", "Senior Developer"), comps: [...ctx.comps, { id: "c1", name: "Ravi", date: "2026-07-11", days: 1, reason: "ravi-weekend" }] }),
   TimecardGrid: () => TimecardGrid(ctx),
   TimecardInsights: () => TimecardInsights(ctx),
   AllocationsView: () => AllocationsView(ctx),

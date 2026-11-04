@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { pageSlice } from "../src/lib/paging.js";
 import { planCalc, planMonths } from "../src/lib/plans.js";
 import { appRoleOf } from "../src/lib/roles.js";
-import { canDo, defaultPerms, mergePerms, appRoleForEmp, canDeletePastLeave, canSeeWorkingDays, ROLES } from "../src/lib/permissions.js";
+import { canDo, defaultPerms, mergePerms, appRoleForEmp, canDeletePastLeave, canLogCompOff, canSeeWorkingDays, ROLES } from "../src/lib/permissions.js";
 import { perfResourceTrend, perfScorecard, perfVendorTrend, ragOf, starsOf, weightedScore } from "../src/lib/performance.js";
 import { PERF_CFG } from "./fixtures.js";
 
@@ -73,6 +73,22 @@ test("mergePerms keeps stored overrides but backfills new capabilities", () => {
   assert.equal(canDo(merged, "Lead", "leave.own"), true); // untouched roles keep the default
   assert.equal(canDo(merged, "Developer", "timecard.editAll"), false);
   assert.equal(canDo(merged, "Lead", "timecard.editAll"), true); // default for a cap the store never saw
+});
+
+test("Developers and Senior Developers log their own comp-off without the full ledger", () => {
+  const perms = defaultPerms();
+  const as = (role, p = perms) => (cap) => canDo(p, role, cap);
+  for (const role of ["Developer", "Senior Developer"]) {
+    assert.equal(canDo(perms, role, "leave.compoffOwn"), true, role);
+    assert.equal(canDo(perms, role, "leave.compoff"), false, role); // no ledger, no logging for others
+    assert.equal(canLogCompOff(as(role), true), true, role);
+    assert.equal(canLogCompOff(as(role), false), false, role);
+  }
+  assert.equal(canLogCompOff(as("Lead"), false), true); // the full ledger reaches anyone's entry
+  assert.equal(canLogCompOff(as("Viewer"), true), false);
+  // a stored matrix from before compoffOwn existed gets the default; an explicit revoke sticks
+  assert.equal(canDo(mergePerms({ "leave.compoff": { Developer: false } }), "Developer", "leave.compoffOwn"), true);
+  assert.equal(canLogCompOff(as("Developer", mergePerms({ "leave.compoffOwn": { Developer: false } })), true), false);
 });
 
 test("the working-days report is a PM / Admin tool — no other role sees it", () => {

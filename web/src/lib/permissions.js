@@ -6,7 +6,8 @@ export const PERM_GROUPS = [
     ["leave.own", "Submit own leave · delete own entries", { D: 1, L: 1, P: 1, V: 0 }],
     ["leave.records", "View all leave records", { D: 0, L: 1, P: 1, V: 1 }],
     ["leave.forAnyone", "File / delete leave for anyone", { D: 0, L: 1, P: 1, V: 0 }],
-    ["leave.compoff", "Log & manage comp-off earned", { D: 0, L: 1, P: 1, V: 0 }],
+    ["leave.compoffOwn", "Log own comp-off earned · delete own entries", { D: 1, L: 1, P: 1, V: 0 }],
+    ["leave.compoff", "Log & manage comp-off for anyone (full ledger)", { D: 0, L: 1, P: 1, V: 0 }],
     ["leave.reports", "Leave reports (role / company / project totals)", { D: 0, L: 1, P: 1, V: 1 }],
     ["settings.edit", "Leave settings (types · weekends · holidays)", { D: 0, L: 0, P: 1, V: 0 }],
   ]},
@@ -76,6 +77,12 @@ export function canDo(perms, role, cap) {
 // leave whose start date has passed is locked — only PM / Admin may delete it
 export function canDeletePastLeave(role) {
   return role === "Project Manager" || role === "Admin";
+}
+
+// log / delete a comp-off entry: anyone's with leave.compoff, your own with leave.compoffOwn
+// (mirrors api/src/rules.js — the API enforces the same rule)
+export function canLogCompOff(can, own) {
+  return can("leave.compoff") || (!!own && can("leave.compoffOwn"));
 }
 
 // the Allocations "Working Days" report nets every leave type and comp-off across the whole

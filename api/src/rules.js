@@ -330,6 +330,10 @@ function ragOf(score, cfg) {
 function canDeletePastLeave(role) {
   return role === "Project Manager" || role === "Admin";
 }
+// log / delete a comp-off entry: anyone's with leave.compoff, your own with leave.compoffOwn
+function canLogCompOff(can, own) {
+  return can("leave.compoff") || (!!own && can("leave.compoffOwn"));
+}
 // effective app role: Lead Developer OR designated Stream Lead -> Lead
 function appRoleForEmp(e) {
   if (e.viewer) return "Viewer"; // read-only persona, regardless of PS role
@@ -347,7 +351,8 @@ const PERM_GROUPS = [
     ["leave.own", "Submit own leave · delete own entries", { D: 1, L: 1, P: 1, V: 0 }],
     ["leave.records", "View all leave records", { D: 0, L: 1, P: 1, V: 1 }],
     ["leave.forAnyone", "File / delete leave for anyone", { D: 0, L: 1, P: 1, V: 0 }],
-    ["leave.compoff", "Log & manage comp-off earned", { D: 0, L: 1, P: 1, V: 0 }],
+    ["leave.compoffOwn", "Log own comp-off earned · delete own entries", { D: 1, L: 1, P: 1, V: 0 }],
+    ["leave.compoff", "Log & manage comp-off for anyone (full ledger)", { D: 0, L: 1, P: 1, V: 0 }],
     ["leave.reports", "Leave reports (role / company / project totals)", { D: 0, L: 1, P: 1, V: 1 }],
     ["settings.edit", "Leave settings (types · weekends · holidays)", { D: 0, L: 0, P: 1, V: 0 }],
   ]},
@@ -757,7 +762,7 @@ module.exports = {
   TC_STATUSES, METRICS, STREAMS, NAME_ALIASES, PERM_GROUPS, PARTNER_COS, OPEN_END, RUNWAY_ROLES,
   parseISO, toISO, isWeekend, isWorkingDay, workingDaysBetween, monthRange,
   leaveDays, leaveDaysInRange, isDuplicate, findOverlaps, compOffDateValid, balancesFor, onLeaveOn,
-  isActiveDuring, appRoleOf, appRoleForEmp, compOffTypeName, tcWeekDays, onLeaveWholeWeek, canDeletePastLeave,
+  isActiveDuring, appRoleOf, appRoleForEmp, compOffTypeName, tcWeekDays, onLeaveWholeWeek, canDeletePastLeave, canLogCompOff,
   tcStats, tcStatsFlex, weekCompliance, weekComplianceFlex, tcSuggested,
   excelToISO, parseTimecardGrid,
   aOverlaps, crossProjectConcurrent, activeAssignmentsOn, effortSplitInMonth, assignmentDaysInMonth, streamsInMonth, currentStream,

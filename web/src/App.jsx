@@ -459,7 +459,7 @@ export default function App() {
     { id: "calendar", label: "Team Calendar", section: "Leave", icon: CalendarDays, show: true },
     { id: "allrecords", label: "Leave Records", section: "Leave", icon: ListChecks, show: can("leave.records") },
     { id: "reports", label: "Leave Reports", section: "Leave", icon: BarChart3, show: can("leave.reports") },
-    { id: "compoff", label: "Comp-Off Log", section: "Leave", icon: Clock, show: can("leave.compoff") },
+    { id: "compoff", label: "Comp-Off Log", section: "Leave", icon: Clock, show: can("leave.compoff") || can("leave.compoffOwn") },
     { id: "timecard", label: isDev ? "My Timecard" : "Timecard Grid", section: "Delivery", icon: Table, show: true },
     { id: "tcsummary", label: "Timecard Insights", section: "Delivery", icon: TrendingUp, show: can("timecard.insights") },
     { id: "alloc", label: "Allocations", section: "Delivery", icon: GitBranch, show: can("alloc.view") },
@@ -572,7 +572,7 @@ export default function App() {
           {nav === "calendar" && <TeamCalendar {...ctx} />}
           {nav === "allrecords" && can("leave.records") && <AllLeaveRecords {...ctx} />}
           {nav === "reports" && can("leave.reports") && <LeaveReports {...ctx} />}
-          {nav === "compoff" && can("leave.compoff") && <CompOffLog {...ctx} />}
+          {nav === "compoff" && (can("leave.compoff") || can("leave.compoffOwn")) && <CompOffLog {...ctx} />}
           {nav === "timecard" && <TimecardGrid {...ctx} />}
           {nav === "tcsummary" && can("timecard.insights") && <TimecardInsights {...ctx} />}
           {nav === "alloc" && can("alloc.view") && <AllocationsView {...ctx} />}
