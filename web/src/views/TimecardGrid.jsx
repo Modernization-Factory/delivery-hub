@@ -16,6 +16,8 @@ import { canDeletePastLeave } from "../lib/permissions.js";
 export function TimecardGrid(ctx) {
   const { tcRows, setTcRows, tcWeeks, setTcWeeks, employees, setEmployees, empByName, user, isDev, todayISO, jiraFlags } = ctx;
   const canManage = ctx.can("timecard.editAll"); // edit cells · import · add weeks
+  // adding a week and importing a file touch everyone, so a team manager (chain only) doesn't get them
+  const canWholeTeam = canManage && !(ctx.user && ctx.user.teamManager);
   const [q, setQ] = useState("");
   const [co, setCo] = useState("All");
   const [pending, setPending] = useState(null); // parsed upload awaiting confirmation
@@ -164,8 +166,8 @@ export function TimecardGrid(ctx) {
             <select className={inputCls + " w-32"} value={co} onChange={(e) => setCo(e.target.value)}>
               {companies.map((c) => <option key={c}>{c}</option>)}
             </select>
-            {canManage && <Btn kind="ghost" small onClick={addWeek}>+ Add week ({fmtShort(nextWeekISO)})</Btn>}
-            {canManage && (
+            {canWholeTeam && <Btn kind="ghost" small onClick={addWeek}>+ Add week ({fmtShort(nextWeekISO)})</Btn>}
+            {canWholeTeam && (
               <label className="cursor-pointer rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50">
                 Import weekly file
                 <input type="file" accept=".xlsx,.xls" className="hidden" onChange={handleFile} />

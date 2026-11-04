@@ -167,8 +167,18 @@ async function resolveUser(req, res, next) {
     const permsDoc = await col("permissions").findOne({ _id: "global" });
     // mergePerms backfills roles/capabilities added after the stored doc was written (e.g. Viewer, plans.*)
     const perms = R.mergePerms(permsDoc && permsDoc.perms);
-    req.user = { employee, role: appRole, email: String(email).toLowerCase(), perms };
-    req.can = (cap) => R.canDo(perms, appRole, cap);
+    // A flagged team manager sees only themselves and their reporting chain: `scope` is that set
+    // of employee ids (strings), or null for everyone else. Routes filter reads by it and refuse
+    // writes outside it; req.can adds the Team Manager column and drops the project screens.
+    const teamManager = R.isTeamManager({ teamManager: employee.teamManager, role: employee.role, isAdmin: employee.isAdmin });
+    let scope = null;
+    if (teamManager) {
+      const org = (await col("employees").find({}, { projection: { managerId: 1 } }).toArray())
+        .map((e) => ({ id: String(e._id), managerId: e.managerId ? String(e.managerId) : null }));
+      scope = new Set([String(employee._id), ...R.reportingChain(org, String(employee._id))]);
+    }
+    req.user = { employee, role: appRole, email: String(email).toLowerCase(), perms, teamManager, scope };
+    req.can = (cap) => R.effectiveCan(perms, appRole, teamManager, cap);
     next();
   } catch (err) {
     next(err);

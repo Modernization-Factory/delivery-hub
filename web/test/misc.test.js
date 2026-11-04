@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { pageSlice } from "../src/lib/paging.js";
 import { planCalc, planMonths } from "../src/lib/plans.js";
 import { appRoleOf } from "../src/lib/roles.js";
-import { canDo, defaultPerms, mergePerms, appRoleForEmp, canDeletePastLeave, canLogCompOff, canSeeWorkingDays, ROLES } from "../src/lib/permissions.js";
+import { canDo, defaultPerms, effectiveCan, mergePerms, appRoleForEmp, canDeletePastLeave, canLogCompOff, canSeeWorkingDays, PERM_GROUPS, PROJECT_CAPS, ROLES } from "../src/lib/permissions.js";
 import { perfResourceTrend, perfScorecard, perfVendorTrend, ragOf, starsOf, weightedScore } from "../src/lib/performance.js";
 import { PERF_CFG } from "./fixtures.js";
 
@@ -89,6 +89,52 @@ test("Developers and Senior Developers log their own comp-off without the full l
   // a stored matrix from before compoffOwn existed gets the default; an explicit revoke sticks
   assert.equal(canDo(mergePerms({ "leave.compoff": { Developer: false } }), "Developer", "leave.compoffOwn"), true);
   assert.equal(canLogCompOff(as("Developer", mergePerms({ "leave.compoffOwn": { Developer: false } })), true), false);
+});
+
+test("a flagged team manager keeps their role, adds the Team Manager column, loses project screens", () => {
+  const P = defaultPerms();
+  // a Developer gains the manager screens: view + approve + file leave / comp-off for reportees
+  for (const cap of ["leave.records", "leave.reports", "leave.forAnyone", "leave.compoff", "timecard.insights", "perf.view", "employees.view", "alloc.view"]) {
+    assert.equal(effectiveCan(P, "Developer", false, cap), false, "unflagged Developer " + cap);
+    assert.equal(effectiveCan(P, "Developer", true, cap), true, "flagged Developer " + cap);
+  }
+  // ...but not the actions left out of the manager column
+  for (const cap of ["timecard.flag", "timecard.editAll", "perf.score", "alloc.edit", "employees.edit", "settings.edit"]) {
+    assert.equal(effectiveCan(P, "Developer", true, cap), false, "flagged Developer " + cap);
+  }
+  // a flagged Lead keeps every Lead capability except the project screens
+  assert.equal(effectiveCan(P, "Lead", true, "timecard.editAll"), true);
+  assert.equal(effectiveCan(P, "Lead", true, "perf.score"), true);
+  for (const cap of PROJECT_CAPS) {
+    assert.equal(effectiveCan(P, "Lead", false, cap), canDo(P, "Lead", cap), "unflagged Lead unchanged: " + cap);
+    assert.equal(effectiveCan(P, "Lead", true, cap), false, "flagged Lead " + cap);
+    assert.equal(effectiveCan(P, "Viewer", true, cap), false, "flagged Viewer " + cap);
+  }
+  // project screens stay off even if an Admin ticks them in the Team Manager column
+  const ticked = { ...P, "runway.view": { ...P["runway.view"], "Team Manager": true } };
+  assert.equal(effectiveCan(ticked, "Developer", true, "runway.view"), false);
+  // unflagged people and Admins are exactly as before
+  for (const g of PERM_GROUPS) for (const [cap] of g.caps) {
+    for (const role of ["Developer", "Senior Developer", "Lead", "Project Manager", "Viewer"]) assert.equal(effectiveCan(P, role, false, cap), canDo(P, role, cap), role + " " + cap);
+    assert.equal(effectiveCan(P, "Admin", true, cap), true, "Admin " + cap);
+  }
+});
+
+test("the Team Manager column is backfilled into a matrix saved before it existed", () => {
+  const merged = mergePerms({ "leave.records": { Developer: false, Lead: true } });
+  assert.equal(merged["leave.records"]["Team Manager"], true);
+  assert.equal(merged["runway.view"]["Team Manager"], false);
+});
+
+test("the API's permission registry matches the app's, Team Manager column included", async () => {
+  const { createRequire } = await import("node:module");
+  const R = createRequire(import.meta.url)("../../api/src/rules.js");
+  assert.deepEqual(R.defaultPerms(), defaultPerms());
+  assert.deepEqual(R.PROJECT_CAPS, PROJECT_CAPS);
+  const P = defaultPerms();
+  for (const g of PERM_GROUPS) for (const [cap] of g.caps) for (const role of ["Developer", "Lead", "Viewer"]) for (const tm of [false, true]) {
+    assert.equal(R.effectiveCan(P, role, tm, cap), effectiveCan(P, role, tm, cap), role + " " + tm + " " + cap);
+  }
 });
 
 test("the working-days report is a PM / Admin tool — no other role sees it", () => {

@@ -65,6 +65,23 @@ test("Employees shows reporting lines, team managers and reportees of an inactiv
   assert.ok(html.includes("1 active person reports to an inactive manager — Mia (Old Hand)"), "reassignment warning");
 });
 
+// A team manager sees only their chain, so whole-team numbers and whole-team actions go.
+test("a flagged team manager doesn't get project burn or whole-team timecard actions", () => {
+  assert.ok(harness.renderScreen("AllocationsView").includes("Projected Burn"), "an unflagged PM keeps Projected Burn");
+  const alloc = harness.renderScreen("AllocationsViewAsTeamManager");
+  assert.ok(!alloc.includes("Projected Burn"), "Projected Burn hidden");
+  assert.ok(alloc.includes("Roster"), "Plan / Roster stay");
+  const lead = harness.renderScreen("TimecardGridAsLead");
+  assert.ok(lead.includes("Import weekly file") && lead.includes("Add week"), "an unflagged Lead keeps import / add week");
+  const tm = harness.renderScreen("TimecardGridAsTeamManager");
+  assert.ok(!tm.includes("Import weekly file") && !tm.includes("Add week"), "a flagged Lead loses import / add week");
+});
+
+test("the permission matrix shows the Team Manager column", () => {
+  const html = harness.renderScreen("AdminPanel").replace(/<!-- -->/g, "");
+  assert.ok(html.includes(">Team Manager<"), "Team Manager column header");
+});
+
 test("the harness covers every screen module in src/views", async () => {
   const fs = await import("node:fs");
   const views = fs.readdirSync(path.join(root, "src/views")).filter((f) => f.endsWith(".jsx"));

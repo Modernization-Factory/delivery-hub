@@ -2,7 +2,9 @@ import { useState } from "react";
 import { isActiveDuring } from "../lib/leave.js";
 import { PERM_GROUPS, defaultPerms } from "../lib/permissions.js";
 
-const PERM_ROLES = ["Developer", "Senior Developer", "Lead", "Project Manager", "Viewer"];
+// "Team Manager" isn't a role: a flagged team manager gets their role's column plus this one,
+// always limited to their reporting chain, and never the project screens
+const PERM_ROLES = ["Developer", "Senior Developer", "Lead", "Project Manager", "Viewer", "Team Manager"];
 import { Btn, Card, Field, Notice, Stat, inputCls } from "../ui/atoms.jsx";
 import { BRAND_FONT } from "../ui/brand.jsx";
 
@@ -23,7 +25,7 @@ export function AdminPanel(ctx) {
       </div>
       <Card title="Permissions — per module, per capability (changes apply instantly)"
         right={<Btn small kind="ghost" onClick={() => ctx.setPerms(defaultPerms())}>Reset to defaults</Btn>}>
-        <p className="mb-3 text-sm text-slate-500">Core rights are fixed: everyone submits their own leave, sees the team calendar and their own timecard; Admin always has everything. Everything else is editable below per role. Senior Developers who are Stream Leads inherit the Lead column; Viewers browse everything and write nothing until granted here.</p>
+        <p className="mb-3 text-sm text-slate-500">Core rights are fixed: everyone submits their own leave, sees the team calendar and their own timecard; Admin always has everything. Everything else is editable below per role. Senior Developers who are Stream Leads inherit the Lead column; Viewers browse everything and write nothing until granted here. <b>Team Manager</b> is added on top of a flagged person's own role, only ever for their reporting chain — project screens (Projects, Team Plans, Program Health, Runway) stay off for them whatever is ticked.</p>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>

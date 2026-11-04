@@ -403,7 +403,7 @@ export default function App() {
       .then((me) => {
         // A saved address that isn't the authenticated (Okta) identity goes back to login.
         if (me.email && me.email !== getIdentity()) throw new Error("identity_mismatch");
-        setUser({ role: me.role, name: me.employee.name }); loadAll(me.role, me.can);
+        setUser({ role: me.role, name: me.employee.name, id: String(me.employee.id), teamManager: !!me.teamManager }); loadAll(me.role, me.can);
       })
       .catch(() => setIdentity(null))
       .finally(() => setRestoring(false));
@@ -425,7 +425,7 @@ export default function App() {
             e.status = 403;
             throw e;
           }
-          setUser({ role: me.role, name: me.employee.name });
+          setUser({ role: me.role, name: me.employee.name, id: String(me.employee.id), teamManager: !!me.teamManager });
           setNav("dash");
           loadAll(me.role, me.can);
         }}

@@ -19,6 +19,8 @@ export function AllocationsView(ctx) {
   // the working-days report is a PM / Admin planning tool, and it reads everyone's comp-off,
   // so it needs the full comp-off log too — Leads, Developers and Viewers never see it
   const canWorkingDays = canSeeWorkingDays(ctx.user.role) && ctx.can("leave.compoff");
+  // project burn is worked out from everyone on a project — a team manager sees only their chain
+  const teamManager = !!ctx.user.teamManager;
   const [tab, setTab] = useState("plan"); // plan | roster | burn | wd
   const [year, setYear] = useState(2026);
   const [q, setQ] = useState("");
@@ -83,7 +85,7 @@ export function AllocationsView(ctx) {
         <h2 className="text-xl font-semibold text-slate-900" style={{ fontFamily: BRAND_FONT }}>Allocations</h2>
         <div className="flex flex-wrap gap-2">
           <div className="flex overflow-hidden rounded-lg border border-slate-300">
-            {[["plan", "Plan"], ["roster", "Roster"], ["burn", "Projected Burn"], ...(canWorkingDays ? [["wd", "Working Days"]] : [])].map(([v, lab]) => (
+            {[["plan", "Plan"], ["roster", "Roster"], ...(teamManager ? [] : [["burn", "Projected Burn"]]), ...(canWorkingDays ? [["wd", "Working Days"]] : [])].map(([v, lab]) => (
               <button key={v} onClick={() => setTab(v)}
                 className={"px-4 py-2 text-sm font-medium transition " + (tab === v ? "mdb-btn-primary text-white" : "bg-white text-slate-600 hover:bg-slate-50")}>
                 {lab}

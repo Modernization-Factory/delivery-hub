@@ -1,7 +1,7 @@
 // Bundled by render.test.js: renders every screen with a realistic ctx so a
 // missing import or a bad reference inside a view fails loudly, not in the browser.
 import { renderToString } from "react-dom/server";
-import { defaultPerms, canDo } from "../src/lib/permissions.js";
+import { defaultPerms, canDo, effectiveCan } from "../src/lib/permissions.js";
 import { AdminPanel } from "../src/views/Admin.jsx";
 import { AllLeaveRecords } from "../src/views/AllLeaveRecords.jsx";
 import { AllocationsView, WorkingDaysReport } from "../src/views/Allocations.jsx";
@@ -77,6 +77,8 @@ const healthRow = {
 
 // the same fixtures seen through another role's permissions
 const asRole = (name, role) => ({ ...ctx, user: { name, role, email: name.toLowerCase() + "@example.com" }, can: (cap) => canDo(defaultPerms(), role, cap) });
+// a flagged team manager: their role plus the Team Manager column, project screens off
+const asManager = (name, role) => ({ ...ctx, user: { name, role, email: name.toLowerCase() + "@example.com", teamManager: true }, can: (cap) => effectiveCan(defaultPerms(), role, true, cap) });
 ctx.assignments = ctx.assignments || [];
 export const SCREENS = {
   Dashboard: () => Dashboard(ctx),
@@ -100,6 +102,10 @@ export const SCREENS = {
   AllocationsView: () => AllocationsView(ctx),
   AllocationsViewAsLead: () => AllocationsView(asRole("Ravi", "Lead")),
   AllocationsViewAsViewer: () => AllocationsView(asRole("Vic", "Viewer")),
+  AllocationsViewAsTeamManager: () => AllocationsView(asManager("Ravi", "Lead")),
+  TimecardGridAsLead: () => TimecardGrid(asRole("Ravi", "Lead")),
+  TimecardGridAsTeamManager: () => TimecardGrid(asManager("Ravi", "Lead")),
+  DashboardTeamManager: () => Dashboard(asManager("Asha", "Developer")),
   AllocationsWorkingDays: () => WorkingDaysReport(ctx),
   // an imported leave whose type is no longer in settings must still show in the by-type split
   AllocationsWorkingDaysOffList: () => WorkingDaysReport({ ...ctx, leaves: [...ctx.leaves, { id: "l9", name: "Ravi", start: "2026-07-21", end: "2026-07-21", type: "Tentative" }] }),
