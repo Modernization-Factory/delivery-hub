@@ -14,7 +14,9 @@ import { leaveDaysInRange } from "./leave.js";
 //   net    base − leave + comp — the days the person can really be planned for
 //
 // `filter(emp)` narrows the roster (role / company / project / name). A person with no
-// working days, leave or comp-off anywhere in the year is dropped from the report.
+// working days, leave or comp-off anywhere in the year is dropped from the report, and so is
+// anyone marked inactive without an end date — there is no date to stop crediting them at,
+// so they would otherwise be counted as available for the whole year.
 export function workingDaysByMonth(employees, leaves, comps, year, leaveTypes, weekendDays, holidaySet, filter = () => true) {
   const months = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
   const yearStart = year + "-01-01";
@@ -29,7 +31,7 @@ export function workingDaysByMonth(employees, leaves, comps, year, leaveTypes, w
   const totals = { byMonth: {}, base: 0, leave: 0, comp: 0, net: 0, people: 0 };
   months.forEach((m) => (totals.byMonth[m] = { base: 0, leave: 0, comp: 0, net: 0 }));
   const rows = [];
-  employees.filter(filter).forEach((emp) => {
+  employees.filter((e) => !(e.inactive && !e.term) && filter(e)).forEach((emp) => {
     const mine = (leaveOf[emp.name] || []).filter((l) => l.end >= yearStart && l.start <= yearEnd);
     const myComps = (compOf[emp.name] || []).filter((c) => c.date >= yearStart && c.date <= yearEnd);
     const byMonth = {};
@@ -69,4 +71,14 @@ export function sumMonths(row, months, metric) {
 
 export function sumAll(rows, months, metric) {
   return rows.reduce((s, r) => s + sumMonths(r, months, metric), 0);
+}
+
+// The leave types to break the report down by: the configured ones, then any type found on a
+// leave but no longer in settings (e.g. an imported "Tentative"). leaveDays counts an off-list
+// type as a full day, so it is already in the net — listing it keeps the per-type split adding
+// up to the leave total instead of silently dropping those days.
+export function reportLeaveTypes(leaveTypes, leaves) {
+  const known = new Set(leaveTypes.map((t) => t.name));
+  const extra = [...new Set(leaves.map((l) => l.type).filter((t) => t && !known.has(t)))].sort();
+  return [...leaveTypes, ...extra.map((name) => ({ name, value: 1, offList: true }))];
 }

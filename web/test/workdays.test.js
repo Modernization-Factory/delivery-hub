@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { sumAll, sumMonths, workingDaysByMonth } from "../src/lib/workdays.js";
+import { reportLeaveTypes, sumAll, sumMonths, workingDaysByMonth } from "../src/lib/workdays.js";
 import { HOLIDAYS, LEAVE_TYPES, NO_HOLIDAYS, WEEKEND } from "./fixtures.js";
 
 // Jul 2026 starts on a Wednesday: 23 working days, 22 with the 2026-07-17 Friday holiday.
@@ -70,6 +70,30 @@ test("comp-off earned in a month adds to the net", () => {
 test("comp-off outside the year is ignored", () => {
   const rep = run([E({})], [], [{ id: "c1", name: "Asha", date: "2025-12-27", days: 1, reason: "old" }]);
   assert.equal(rep.rows[0].comp, 0);
+});
+
+test("an off-list leave type (not in settings) still counts as a full day", () => {
+  const leaves = [{ id: "l1", name: "Asha", start: "2026-07-20", end: "2026-07-21", type: "Tentative" }];
+  const rep = run([E({})], leaves);
+  assert.equal(rep.rows[0].byMonth[7].leave, 2);
+  assert.equal(rep.rows[0].byMonth[7].net, 21);
+});
+
+test("reportLeaveTypes lists configured types first, then off-list types found on leaves", () => {
+  const leaves = [{ type: "Vacation" }, { type: "Tentative" }, { type: "Bereavement" }, { type: "Tentative" }];
+  const types = reportLeaveTypes(LEAVE_TYPES, leaves);
+  assert.deepEqual(types.map((t) => t.name), ["Vacation", "Sick", "Unpaid", "Half Day", "Comp-Off", "Bereavement", "Tentative"]);
+  assert.deepEqual(types.slice(-2).map((t) => [t.value, t.offList]), [[1, true], [1, true]]);
+  assert.equal(types.filter((t) => t.offList).length, 2);
+  assert.deepEqual(reportLeaveTypes(LEAVE_TYPES, []).map((t) => t.name), LEAVE_TYPES.map((t) => t.name));
+});
+
+test("inactive without an end date is left out; inactive with one is clipped to it", () => {
+  const people = [E({ inactive: true }), E({ id: "e2", name: "Ravi", inactive: true, term: "2026-07-15" })];
+  const rep = run(people);
+  assert.deepEqual(rep.rows.map((r) => r.name), ["Ravi"]); // Asha would otherwise get all 261 days
+  assert.equal(rep.rows[0].byMonth[7].base, 11);
+  assert.equal(rep.rows[0].byMonth[8].base, 0);
 });
 
 test("the filter predicate narrows the roster", () => {
