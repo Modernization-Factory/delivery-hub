@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { pageSlice } from "../src/lib/paging.js";
 import { planCalc, planMonths } from "../src/lib/plans.js";
 import { appRoleOf } from "../src/lib/roles.js";
-import { canDo, defaultPerms, mergePerms, appRoleForEmp, canDeletePastLeave, ROLES } from "../src/lib/permissions.js";
+import { canDo, defaultPerms, mergePerms, appRoleForEmp, canDeletePastLeave, canSeeWorkingDays, ROLES } from "../src/lib/permissions.js";
 import { perfResourceTrend, perfScorecard, perfVendorTrend, ragOf, starsOf, weightedScore } from "../src/lib/performance.js";
 import { PERF_CFG } from "./fixtures.js";
 
@@ -73,6 +73,12 @@ test("mergePerms keeps stored overrides but backfills new capabilities", () => {
   assert.equal(canDo(merged, "Lead", "leave.own"), true); // untouched roles keep the default
   assert.equal(canDo(merged, "Developer", "timecard.editAll"), false);
   assert.equal(canDo(merged, "Lead", "timecard.editAll"), true); // default for a cap the store never saw
+});
+
+test("the working-days report is a PM / Admin tool — no other role sees it", () => {
+  assert.equal(canSeeWorkingDays("Project Manager"), true);
+  assert.equal(canSeeWorkingDays("Admin"), true);
+  for (const role of ["Lead", "Developer", "Senior Developer", "Viewer"]) assert.equal(canSeeWorkingDays(role), false, role);
 });
 
 test("appRoleForEmp derives the app role from the employee master", () => {

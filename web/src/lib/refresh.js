@@ -12,7 +12,7 @@ export const PAGE_DATA = {
   reports: ["employees", "leaves", "projects", "assignments"],
   timecard: ["employees", "timecards", "projects", "assignments", "leaves"],
   tcsummary: ["employees", "timecards", "projects", "assignments"],
-  alloc: ["employees", "assignments", "projects", "leaves"],
+  alloc: ["employees", "assignments", "projects", "leaves", "comps"],
   projects: ["employees", "projects", "assignments", "raid", "milestones"],
   plans: ["plans", "projects"],
   programhealth: ["projects", "weeklyHealth", "raid", "milestones", "pipeline"],

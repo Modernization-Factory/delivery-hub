@@ -78,6 +78,12 @@ export function canDeletePastLeave(role) {
   return role === "Project Manager" || role === "Admin";
 }
 
+// the Allocations "Working Days" report nets every leave type and comp-off across the whole
+// team, so it is a PM / Admin planning tool — Leads, Developers and Viewers never see it
+export function canSeeWorkingDays(role) {
+  return role === "Project Manager" || role === "Admin";
+}
+
 // effective app role: Lead Developer OR designated Stream Lead -> Lead
 export function appRoleForEmp(e) {
   if (e.viewer) return "Viewer"; // read-only persona, regardless of PS role

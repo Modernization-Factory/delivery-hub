@@ -27,6 +27,14 @@ for (const name of Object.keys(harness.SCREENS)) {
   });
 }
 
+// The Working Days tab nets leave and comp-off across the whole team, so it is a PM / Admin
+// tool: the button must not exist for anyone else, not merely be disabled.
+test("the Working Days tab is offered to PM / Admin only", () => {
+  assert.ok(harness.renderScreen("AllocationsView").includes("Working Days"), "a PM should see the tab");
+  assert.ok(!harness.renderScreen("AllocationsViewAsLead").includes("Working Days"), "a Lead should not see the tab");
+  assert.ok(!harness.renderScreen("AllocationsViewAsViewer").includes("Working Days"), "a Viewer should not see the tab");
+});
+
 test("the harness covers every screen module in src/views", async () => {
   const fs = await import("node:fs");
   const views = fs.readdirSync(path.join(root, "src/views")).filter((f) => f.endsWith(".jsx"));
