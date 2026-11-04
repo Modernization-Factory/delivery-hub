@@ -4,7 +4,7 @@ import { OPEN_END } from "../lib/constants.js";
 import { fmt, fmtShort, monthRange, parseISO } from "../lib/dates.js";
 import { isActiveDuring, leaveColor, leaveDaysInRange } from "../lib/leave.js";
 import { canSeeWorkingDays } from "../lib/permissions.js";
-import { sumAll, sumMonths, workingDaysByMonth } from "../lib/workdays.js";
+import { reportLeaveTypes, sumAll, sumMonths, workingDaysByMonth } from "../lib/workdays.js";
 import { downloadXlsx } from "../lib/xlsx.js";
 import { Btn, Card, Field, Notice, Pill, Stat, inputCls } from "../ui/atoms.jsx";
 import { BRAND_FONT } from "../ui/brand.jsx";
@@ -478,16 +478,23 @@ export function WorkingDaysReport(ctx) {
     recordsIn(name).forEach((x) => { o[x.l.type] = (o[x.l.type] || 0) + x.days; });
     return o;
   };
-  // every configured leave type feeds the net — surface the split so nothing looks left out
-  const leaveByType = useMemo(() => {
+  // every leave type feeds the net, including off-list ones still on old leaves — surface the
+  // split so nothing looks left out, and so the chips add up to the leave total
+  const types = useMemo(() => reportLeaveTypes(leaveTypes, leaves), [leaveTypes, leaves]);
+  const { leaveByType, peopleOnLeave } = useMemo(() => {
+    const names = new Set(rep.rows.map((r) => r.name));
     const out = {};
-    rep.rows.forEach((r) => leaves.forEach((l) => {
-      if (l.name !== r.name || l.end < periodStart || l.start > periodEnd) return;
+    const who = new Set();
+    leaves.forEach((l) => {
+      if (!names.has(l.name) || l.end < periodStart || l.start > periodEnd) return;
       const d = leaveDaysInRange(l, periodStart, periodEnd, leaveTypes, weekendDays, holidaySet);
-      if (d) out[l.type] = (out[l.type] || 0) + d;
-    }));
-    return out;
+      if (!d) return;
+      out[l.type] = (out[l.type] || 0) + d;
+      who.add(l.name);
+    });
+    return { leaveByType: out, peopleOnLeave: who.size };
   }, [rep, leaves, periodStart, periodEnd, leaveTypes, weekendDays, holidaySet]);
+  const typeText = (t) => t.name + (t.offList ? " (not in settings — counted as 1 day)" : t.value === 1 ? "" : " (" + t.value + " day)");
 
   function exportExcel() {
     const head = ["Resource", "Role", "Company", ...visMonths.map((m) => mLabel(m) + " " + year), metricLabel];
@@ -503,7 +510,7 @@ export function WorkingDaysReport(ctx) {
     const compSheet = [["Resource", "Role", "Company", "Date worked", "Days", "Reason"]];
     rep.rows.forEach((r) => compsIn(r.name).forEach((c) => compSheet.push([r.name, r.emp.role || "", r.emp.company || "", c.date, r1(Number(c.days)), c.reason || ""])));
     const typeSheet = [["Leave type", "Day value", "Days"]];
-    leaveTypes.forEach((t) => typeSheet.push([t.name, t.value, r1(leaveByType[t.name] || 0)]));
+    types.forEach((t) => typeSheet.push([t.name + (t.offList ? " (not in settings)" : ""), t.value, r1(leaveByType[t.name] || 0)]));
     typeSheet.push(["All types", "", r1(grand("leave"))]);
     const filters = [["Filters"], ["Period", periodText], ["Role", role], ["Company", company], ["Project", proj === "All" ? "All projects" : projName(proj)], ["Metric", metricLabel], ["Name contains", q || "—"]];
     downloadXlsx("working-days-" + (month === "all" ? String(year) : year + "-" + String(month).padStart(2, "0")) + ".xlsx", [
@@ -520,7 +527,7 @@ export function WorkingDaysReport(ctx) {
     <div className="space-y-5">
       <Notice tone="ok">
         Working days are counted inside each person's employment window only — weekends and the {holidaySet.size} configured holidays are excluded.
-        <b> Net</b> = calendar working days − leave + comp-off earned. Every leave type counts — {leaveTypes.map((t) => t.name + (t.value === 1 ? "" : " (" + t.value + " day)")).join(", ")} — so comp-off taken is subtracted like any other leave, and comp-off earned (a weekend or holiday worked) is added back.
+        <b> Net</b> = calendar working days − leave + comp-off earned. Every leave type counts — {types.map(typeText).join(", ")} — so comp-off taken is subtracted like any other leave, and comp-off earned (a weekend or holiday worked) is added back.
       </Notice>
 
       <Card>
@@ -562,22 +569,22 @@ export function WorkingDaysReport(ctx) {
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat label="Net working days" value={r1(grand("net"))} sub={periodText + " · " + filterText} />
         <Stat label="Calendar working days" value={r1(grand("base"))} sub="before leave and comp-off" />
-        <Stat label="Leave days" value={r1(grand("leave"))} sub={"across " + rep.totals.people + " resource(s)"} />
+        <Stat label="Leave days" value={r1(grand("leave"))} sub={peopleOnLeave + " of " + rep.totals.people + " resource(s) took leave"} />
         <Stat label="Comp-off earned" value={r1(grand("comp"))} sub="weekend / holiday days worked" />
       </div>
 
       <Card title={"Leave days by type — " + periodText + " (every type counts toward the net)"}>
         <div className="flex flex-wrap gap-2">
-          {leaveTypes.map((t) => (
-            <span key={t.name} className={"inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium " + leaveColor(t.name, leaveTypes)}>
-              {t.name}<span className="text-sm font-semibold">{r1(leaveByType[t.name] || 0)}</span>
+          {types.map((t) => (
+            <span key={t.name} title={typeText(t)} className={"inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium " + leaveColor(t.name, leaveTypes)}>
+              {t.name}{t.offList ? "*" : ""}<span className="text-sm font-semibold">{r1(leaveByType[t.name] || 0)}</span>
             </span>
           ))}
           <span className="inline-flex items-center gap-2 rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700">
             All leave<span className="text-sm font-semibold">{r1(grand("leave"))}</span>
           </span>
         </div>
-        <p className="mt-2 text-xs text-slate-400">Each leave day is weighted by its type's value — a Half Day counts 0.5. Comp-off taken is the comp-off type above; comp-off earned is added separately.</p>
+        <p className="mt-2 text-xs text-slate-400">Each leave day is weighted by its type's value — a Half Day counts 0.5. Comp-off taken is the comp-off type above; comp-off earned is added separately.{types.some((t) => t.offList) ? " * Found on leave records but not in Leave Settings — counted as a full day." : ""}</p>
       </Card>
 
       <Card title={metricLabel + " — " + periodText}>
@@ -612,7 +619,7 @@ export function WorkingDaysReport(ctx) {
                             <div>
                               <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Leave — {r1(sumMonths(r, visMonths, "leave"))} day(s)</div>
                               <div className="mb-2 flex flex-wrap gap-1">
-                                {leaveTypes.map((t) => (
+                                {types.filter((t) => !t.offList || bt[t.name]).map((t) => (
                                   <span key={t.name} className={"rounded px-1.5 py-0.5 text-xs " + (bt[t.name] ? leaveColor(t.name, leaveTypes) : "bg-slate-100 text-slate-400")}>
                                     {t.name} {r1(bt[t.name] || 0)}
                                   </span>

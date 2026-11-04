@@ -35,6 +35,12 @@ test("the Working Days tab is offered to PM / Admin only", () => {
   assert.ok(!harness.renderScreen("AllocationsViewAsViewer").includes("Working Days"), "a Viewer should not see the tab");
 });
 
+test("the Working Days by-type split lists a leave type that isn't in settings", () => {
+  const html = harness.renderScreen("AllocationsWorkingDaysOffList");
+  assert.ok(html.includes("Tentative"), "the off-list type should get its own chip");
+  assert.ok(html.includes("not in settings"), "and be labelled as off-list");
+});
+
 test("the harness covers every screen module in src/views", async () => {
   const fs = await import("node:fs");
   const views = fs.readdirSync(path.join(root, "src/views")).filter((f) => f.endsWith(".jsx"));

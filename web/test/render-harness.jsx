@@ -98,6 +98,8 @@ export const SCREENS = {
   AllocationsViewAsLead: () => AllocationsView(asRole("Ravi", "Lead")),
   AllocationsViewAsViewer: () => AllocationsView(asRole("Vic", "Viewer")),
   AllocationsWorkingDays: () => WorkingDaysReport(ctx),
+  // an imported leave whose type is no longer in settings must still show in the by-type split
+  AllocationsWorkingDaysOffList: () => WorkingDaysReport({ ...ctx, leaves: [...ctx.leaves, { id: "l9", name: "Ravi", start: "2026-07-21", end: "2026-07-21", type: "Tentative" }] }),
   ProgramHealthView: () => ProgramHealthView(ctx),
   TeamPlansView: () => TeamPlansView(ctx),
   PerformanceView: () => PerformanceView(ctx),
