@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { fmt } from "../lib/dates.js";
 import { isActiveDuring } from "../lib/leave.js";
+import { canBeTeamManager, isTeamManager, managerOptions, reporteesOf, reportingError } from "../lib/reporting.js";
 import { CustomFieldsCard } from "../ui/CustomFieldsCard.jsx";
 import { Btn, Card, Field, Notice, Pill, inputCls } from "../ui/atoms.jsx";
 import { BRAND_FONT } from "../ui/brand.jsx";
@@ -23,6 +24,10 @@ export function EmployeesView(ctx) {
     .filter((e) => e.name.toLowerCase().includes(q.toLowerCase()) && (!activeOnly || isActive(e)))
     .sort((a, b) => a.name.localeCompare(b.name));
   const { rows: pageRows, pager } = usePaged(rows, 25);
+  const byId = Object.fromEntries(employees.map((e) => [e.id, e]));
+  const nameOf = (id) => (byId[id] ? byId[id].name : "—");
+  // active people whose manager has gone inactive — they need reassigning
+  const orphaned = employees.filter((e) => !e.inactive && e.managerId && byId[e.managerId] && byId[e.managerId].inactive);
   function save(form) {
     setMsg(null);
     if (!form.name.trim()) return setMsg({ tone: "error", text: "Name is required." });
@@ -33,6 +38,8 @@ export function EmployeesView(ctx) {
     const emailClash = form.email && employees.find((e) => e.email && e.email.toLowerCase() === form.email.trim().toLowerCase() && e.id !== form.id);
     if (emailClash) return setMsg({ tone: "error", text: "That email is already on " + emailClash.name + " — emails are the login identity and must be unique." });
     if (form.inactive && form.name === ctx.user.name) return setMsg({ tone: "error", text: "You can't mark yourself inactive." });
+    const bad = reportingError(employees, form); // the API enforces the same rules
+    if (bad) return setMsg({ tone: "error", text: bad.detail });
     if (form.email) form = { ...form, email: form.email.trim().toLowerCase() };
     if (form.id) setEmployees(employees.map((e) => (e.id === form.id ? form : e)));
     else setEmployees([...employees, { ...form, id: nextId("e") }]);
@@ -49,14 +56,20 @@ export function EmployeesView(ctx) {
             Active only
           </label>
           <input className={inputCls + " w-56"} placeholder="Search…" value={q} onChange={(e) => setQ(e.target.value)} />
-          {canConfigure && <Btn onClick={() => setEdit({ id: null, name: "", email: "", role: "Developer", company: "MDB", start: "", term: null, streamLead: false, viewer: false, inactive: false, custom: {} })}>Add employee</Btn>}
+          {canConfigure && <Btn onClick={() => setEdit({ id: null, name: "", email: "", role: "Developer", company: "MDB", start: "", term: null, streamLead: false, viewer: false, inactive: false, custom: {}, teamManager: false, managerId: null })}>Add employee</Btn>}
         </div>
       </div>
       {!canConfigure && <Notice tone="warn">View only — the employee master is maintained by the Project Manager (same rule as the source tracker).</Notice>}
       {msg && <Notice tone={msg.tone === "error" ? "error" : "ok"}>{msg.text}</Notice>}
+      {orphaned.length > 0 && (
+        <Notice tone="warn">
+          {orphaned.length} active {orphaned.length === 1 ? "person reports" : "people report"} to an inactive manager — {orphaned.map((e) => e.name + " (" + nameOf(e.managerId) + ")").join(", ")}.
+          Until they're reassigned, their comp-off is approved by a manager further up the chain or an Admin.
+        </Notice>
+      )}
       {edit && canConfigure && (
         <Card title={edit.id ? "Edit " + edit.name : "New employee"}>
-          <EmpForm initial={edit} empFields={empFields} onSave={save} onCancel={() => setEdit(null)} />
+          <EmpForm initial={edit} empFields={empFields} employees={employees} onSave={save} onCancel={() => setEdit(null)} />
         </Card>
       )}
       {isAdmin && <CustomFieldsCard empFields={empFields} setEmpFields={setEmpFields} nextId={nextId} />}
@@ -65,7 +78,7 @@ export function EmployeesView(ctx) {
           <table className="w-full text-sm">
             <thead className="sticky top-0 bg-white">
               <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
-                <th className="py-2 pr-4">Name</th><th className="py-2 pr-4">Email (login identity)</th><th className="py-2 pr-4">Role</th><th className="py-2 pr-4">Company</th><th className="py-2 pr-4">Start</th><th className="py-2 pr-4">End date</th>{empFields.map((cf) => <th key={cf.id} className="py-2 pr-4">{cf.label}</th>)}{canConfigure && <th />}
+                <th className="py-2 pr-4">Name</th><th className="py-2 pr-4">Email (login identity)</th><th className="py-2 pr-4">Role</th><th className="py-2 pr-4">Reports to</th><th className="py-2 pr-4">Company</th><th className="py-2 pr-4">Start</th><th className="py-2 pr-4">End date</th>{empFields.map((cf) => <th key={cf.id} className="py-2 pr-4">{cf.label}</th>)}{canConfigure && <th />}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -73,7 +86,10 @@ export function EmployeesView(ctx) {
                 <tr key={e.id}>
                   <td className="py-1.5 pr-4 font-medium text-slate-800">{e.name}</td>
                   <td className="py-1.5 pr-4 text-slate-500">{e.email || <span className="text-amber-600" title="No email — this person can't log in to the live app">not set</span>}</td>
-                  <td className="py-1.5 pr-4"><Pill tone={e.role === "Project Manager" ? "bg-purple-100 text-purple-800" : e.role === "Lead Developer" ? "bg-sky-100 text-sky-800" : "bg-slate-100 text-slate-600"}>{e.role}</Pill>{e.streamLead && <Pill tone="ml-1 bg-indigo-100 text-indigo-800">Stream Lead</Pill>}{e.viewer && <Pill tone="ml-1 bg-teal-100 text-teal-800">Viewer</Pill>}{e.inactive && <Pill tone="ml-1 bg-rose-100 text-rose-800">Inactive</Pill>}</td>
+                  <td className="py-1.5 pr-4"><Pill tone={e.role === "Project Manager" ? "bg-purple-100 text-purple-800" : e.role === "Lead Developer" ? "bg-sky-100 text-sky-800" : "bg-slate-100 text-slate-600"}>{e.role}</Pill>{e.streamLead && <Pill tone="ml-1 bg-indigo-100 text-indigo-800">Stream Lead</Pill>}{e.viewer && <Pill tone="ml-1 bg-teal-100 text-teal-800">Viewer</Pill>}{e.inactive && <Pill tone="ml-1 bg-rose-100 text-rose-800">Inactive</Pill>}{isTeamManager(e) && <Pill tone="ml-1 bg-amber-100 text-amber-800">Team Manager · {reporteesOf(employees, e.id).length}</Pill>}</td>
+                  <td className="py-1.5 pr-4 text-slate-600">
+                    {e.managerId ? <>{nameOf(e.managerId)}{byId[e.managerId] && byId[e.managerId].inactive && <Pill tone="ml-1 bg-rose-100 text-rose-800">manager inactive</Pill>}</> : <span className="text-slate-300">—</span>}
+                  </td>
                   <td className="py-1.5 pr-4 text-slate-600">{e.company}</td>
                   <td className="py-1.5 pr-4 text-slate-500">{fmt(e.start)}</td>
                   <td className="py-1.5 pr-4 text-slate-500">
@@ -97,8 +113,13 @@ export function EmployeesView(ctx) {
   );
 }
 
-export function EmpForm({ initial, empFields = [], onSave, onCancel }) {
+export function EmpForm({ initial, empFields = [], employees = [], onSave, onCancel }) {
   const [f, setF] = useState(initial);
+  const eligible = canBeTeamManager(f);
+  const reportees = f.id ? reporteesOf(employees, f.id) : [];
+  const options = managerOptions(employees, f);
+  // keep showing a current manager who's no longer pickable (e.g. now inactive)
+  const current = f.managerId && !options.some((m) => m.id === f.managerId) ? employees.find((m) => m.id === f.managerId) : null;
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const setCustom = (id) => (e) => setF({ ...f, custom: { ...(f.custom || {}), [id]: e.target.value } });
   return (
@@ -118,7 +139,22 @@ export function EmpForm({ initial, empFields = [], onSave, onCancel }) {
         </Field>
         <Field label="Start date"><input type="date" className={inputCls} value={f.start || ""} onChange={set("start")} /></Field>
         <Field label="End date (last working day; leave blank if ongoing)"><input type="date" className={inputCls} value={f.term || ""} onChange={(e) => setF({ ...f, term: e.target.value || null })} /></Field>
+        <Field label="Reports to (team managers only)">
+          <select className={inputCls} value={f.managerId || ""} onChange={(e) => setF({ ...f, managerId: e.target.value || null })}>
+            <option value="">— no manager —</option>
+            {current && <option value={current.id}>{current.name}{current.inactive ? " (inactive)" : " (not a team manager)"}</option>}
+            {options.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </select>
+        </Field>
       </div>
+      <label className={"mt-3 flex items-center gap-2 text-sm " + (eligible ? "cursor-pointer text-slate-700" : "text-slate-400")}>
+        <input type="checkbox" className="h-4 w-4 accent-amber-600" disabled={!eligible && !f.teamManager} checked={!!f.teamManager} onChange={(e) => setF({ ...f, teamManager: e.target.checked })} />
+        Team manager — can be picked as someone's manager; sees only themselves and their reporting chain on every screen, approves their comp-off, and doesn't see project screens
+        {!eligible && <span className="text-xs">(not available for a Project Manager or Admin — they already see the whole team)</span>}
+      </label>
+      {f.teamManager && reportees.length > 0 && (
+        <p className="ml-6 mt-1 text-xs text-slate-500">Reportees: {reportees.map((e) => e.name).sort().join(", ")}</p>
+      )}
       {(f.role === "Developer" || f.role === "Senior Developer") && (
         <label className="mt-3 flex cursor-pointer items-center gap-2 text-sm text-slate-700">
           <input type="checkbox" className="h-4 w-4 accent-emerald-700" checked={!!f.streamLead} onChange={(e) => setF({ ...f, streamLead: e.target.checked })} />

@@ -109,6 +109,11 @@ export const SCREENS = {
   RunwayView: () => RunwayView(ctx),
   ProjectsView: () => ProjectsView(ctx),
   EmployeesView: () => EmployeesView(ctx),
+  // Ravi manages Asha; Old Hand (inactive) still has Mia reporting to him
+  EmployeesWithReporting: () => EmployeesView({ ...ctx, allEmployees: [
+    { ...employees[0], managerId: "e1" }, { ...employees[1], teamManager: true }, { ...employees[2], managerId: "e9" },
+    { id: "e9", name: "Old Hand", role: "Developer", company: "MDB", start: "2025-01-01", term: null, inactive: true, teamManager: true },
+  ] }),
   SettingsView: () => SettingsView(ctx),
   AdminPanel: () => AdminPanel(ctx),
   ComingSoon: () => ComingSoon({ id: "reports", role: "Project Manager" }),

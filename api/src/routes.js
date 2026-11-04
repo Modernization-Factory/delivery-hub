@@ -54,7 +54,13 @@ function leaveCtx(s) {
     holidaySet: new Set((s.holidays || []).map(iso)),
   };
 }
-const empShape = (e) => ({ id: e._id, name: e.name, email: e.email, role: e.role, streamLead: !!e.streamLead, viewer: !!e.viewer, isAdmin: !!e.isAdmin, inactive: !!e.inactive, company: e.company, start: iso(e.startDate), term: iso(e.endDate), custom: e.custom || {} });
+const mgrOf = (e) => (e.managerId ? String(e.managerId) : null);
+const empShape = (e) => ({ id: e._id, name: e.name, email: e.email, role: e.role, streamLead: !!e.streamLead, viewer: !!e.viewer, isAdmin: !!e.isAdmin, inactive: !!e.inactive, company: e.company, start: iso(e.startDate), term: iso(e.endDate), custom: e.custom || {}, teamManager: !!e.teamManager, managerId: mgrOf(e) });
+// everyone as the reporting rules see them (string ids)
+const orgShape = (e) => ({ id: String(e._id), name: e.name, role: e.role, isAdmin: !!e.isAdmin, inactive: !!e.inactive, teamManager: !!e.teamManager, managerId: mgrOf(e) });
+async function org() {
+  return (await col("employees").find({}, { projection: { name: 1, role: 1, isAdmin: 1, inactive: 1, teamManager: 1, managerId: 1 } }).toArray()).map(orgShape);
+}
 
 // ---------- me ----------
 // `email` is the identity the request was authenticated as (the Okta claim on Kanopy),
@@ -70,7 +76,7 @@ router.get("/me", async (req, res) => {
 // ---------- employees ----------
 // Without employees.view the caller still gets a name directory (no email / custom fields) —
 // every role needs it to resolve names on their own leave, timecard and the team calendar.
-const dirShape = (e) => ({ id: e._id, name: e.name, role: e.role, inactive: !!e.inactive, company: e.company, start: iso(e.startDate), term: iso(e.endDate) });
+const dirShape = (e) => ({ id: e._id, name: e.name, role: e.role, inactive: !!e.inactive, company: e.company, start: iso(e.startDate), term: iso(e.endDate), teamManager: !!e.teamManager, managerId: mgrOf(e) });
 router.get("/employees", async (req, res) => {
   const all = await col("employees").find().sort({ name: 1 }).toArray();
   res.json(all.map(req.can("employees.view") ? empShape : dirShape));
@@ -79,7 +85,11 @@ router.post("/employees", requireCap("employees.edit"), audit("employee.create")
   const { name, email, role, company, start, term, streamLead, viewer, inactive, custom } = req.body;
   if (!name || !name.trim()) return res.status(422).json({ error: "name_required" });
   if (await col("employees").findOne({ name: name.trim() })) return res.status(409).json({ error: "duplicate_name" });
-  const doc = { name: name.trim(), email: email ? String(email).toLowerCase() : null, role: role || "Developer", streamLead: !!streamLead, viewer: !!viewer, inactive: !!inactive, custom: custom || {}, isAdmin: false, company: company || "MDB", startDate: day(start), endDate: day(term), createdAt: new Date(), updatedAt: new Date(), updatedBy: req.user.employee.name };
+  const teamManager = !!req.body.teamManager;
+  const managerId = req.body.managerId ? String(oid(req.body.managerId)) : null;
+  const bad = R.reportingError(await org(), { id: null, name: name.trim(), role: role || "Developer", isAdmin: false, teamManager, managerId });
+  if (bad) return res.status(422).json(bad);
+  const doc = { name: name.trim(), email: email ? String(email).toLowerCase() : null, role: role || "Developer", streamLead: !!streamLead, viewer: !!viewer, inactive: !!inactive, custom: custom || {}, isAdmin: false, teamManager, managerId: managerId ? new ObjectId(managerId) : null, company: company || "MDB", startDate: day(start), endDate: day(term), createdAt: new Date(), updatedAt: new Date(), updatedBy: req.user.employee.name };
   const r = await col("employees").insertOne(doc);
   res.status(201).json(empShape({ ...doc, _id: r.insertedId }));
 });
@@ -87,9 +97,17 @@ router.put("/employees/:id", requireCap("employees.edit"), audit("employee.updat
   const { name, email, role, company, start, term, streamLead, viewer, inactive, custom } = req.body;
   if (term && start && term < start) return res.status(422).json({ error: "end_before_start" });
   if (inactive && String(req.params.id) === String(req.user.employee._id)) return res.status(422).json({ error: "cannot_deactivate_self", detail: "You can't mark yourself inactive." });
+  const id = oid(req.params.id);
+  const cur = await col("employees").findOne({ _id: id });
+  if (!cur) return res.status(404).json({ error: "employee_not_found" });
+  // a request that doesn't mention the reporting fields (an older open tab) keeps what's stored
+  const teamManager = req.body.teamManager === undefined ? !!cur.teamManager : !!req.body.teamManager;
+  const managerId = req.body.managerId === undefined ? mgrOf(cur) : req.body.managerId ? String(oid(req.body.managerId)) : null;
+  const bad = R.reportingError(await org(), { id: String(id), name, role, isAdmin: !!cur.isAdmin, teamManager, managerId });
+  if (bad) return res.status(422).json(bad);
   await col("employees").updateOne(
-    { _id: new ObjectId(req.params.id) },
-    { $set: { name, email: email ? String(email).toLowerCase() : null, role, company, streamLead: !!streamLead, viewer: !!viewer, inactive: !!inactive, custom: custom || {}, startDate: day(start), endDate: day(term), updatedAt: new Date(), updatedBy: req.user.employee.name } }
+    { _id: id },
+    { $set: { name, email: email ? String(email).toLowerCase() : null, role, company, streamLead: !!streamLead, viewer: !!viewer, inactive: !!inactive, custom: custom || {}, teamManager, managerId: managerId ? new ObjectId(managerId) : null, startDate: day(start), endDate: day(term), updatedAt: new Date(), updatedBy: req.user.employee.name } }
   );
   res.json({ ok: true });
 });
@@ -711,6 +729,8 @@ router.put("/admin/employees/:id/admin", requireAdmin, audit("employee.setAdmin"
   if (typeof isAdmin !== "boolean") return res.status(422).json({ error: "isAdmin_must_be_boolean" });
   if (isAdmin && (await col("employees").findOne({ _id: id, inactive: true }))) return res.status(422).json({ error: "employee_inactive", detail: "Inactive employees can't be made Admin." });
   if (!isAdmin && id.equals(req.user.employee._id)) return res.status(422).json({ error: "cannot_revoke_self", detail: "You can't remove your own Admin access — ask another Admin." });
+  // Admins see the whole team, so a team manager has to be unflagged (reportees reassigned) first
+  if (isAdmin && (await col("employees").findOne({ _id: id, teamManager: true }))) return res.status(422).json({ error: "team_manager", detail: "This person is flagged as a team manager — remove that flag on the Employees page (reassigning their reportees) before making them Admin." });
   const r = await col("employees").updateOne({ _id: id }, { $set: { isAdmin, updatedAt: new Date(), updatedBy: req.user.employee.name } });
   if (!r.matchedCount) return res.status(404).json({ error: "employee_not_found" });
   res.json({ ok: true });

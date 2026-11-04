@@ -124,7 +124,7 @@ export default function App() {
   async function loadEmployees() {
     const es = await api("/employees").catch(() => null);
     if (!es) return empNameByIdNow();
-    setEmployees0(es.map((e) => ({ id: String(e.id), name: e.name, email: e.email || "", role: e.role, company: e.company, start: e.start, term: e.term, streamLead: !!e.streamLead, viewer: !!e.viewer, isAdmin: !!e.isAdmin, inactive: !!e.inactive, custom: e.custom || {} })));
+    setEmployees0(es.map((e) => ({ id: String(e.id), name: e.name, email: e.email || "", role: e.role, company: e.company, start: e.start, term: e.term, streamLead: !!e.streamLead, viewer: !!e.viewer, isAdmin: !!e.isAdmin, inactive: !!e.inactive, custom: e.custom || {}, teamManager: !!e.teamManager, managerId: e.managerId ? String(e.managerId) : null })));
     setSrvMaps((m) => ({ ...m, empIdByName: Object.fromEntries(es.map((e) => [e.name, String(e.id)])) }));
     return Object.fromEntries(es.map((e) => [String(e.id), e.name]));
   }
@@ -193,8 +193,8 @@ export default function App() {
     const next = [...next0, ...employees.filter((e) => e.inactive && !next0.some((x) => x.id === e.id))];
     const prev = employees; setEmployees0(next);
     diffSync(prev, next, {
-      create: (e) => fire("/employees", api("/employees", { method: "POST", body: { name: e.name, email: e.email || null, role: e.role, company: e.company, start: e.start, term: e.term, streamLead: !!e.streamLead, viewer: !!e.viewer, inactive: !!e.inactive, custom: e.custom || {} } }).then(reloadLoaded)),
-      update: (e) => fire("/employees", api("/employees/" + e.id, { method: "PUT", body: { name: e.name, email: e.email || null, role: e.role, company: e.company, start: e.start, term: e.term, streamLead: !!e.streamLead, viewer: !!e.viewer, inactive: !!e.inactive, custom: e.custom || {} } })),
+      create: (e) => fire("/employees", api("/employees", { method: "POST", body: { name: e.name, email: e.email || null, role: e.role, company: e.company, start: e.start, term: e.term, streamLead: !!e.streamLead, viewer: !!e.viewer, inactive: !!e.inactive, custom: e.custom || {}, teamManager: !!e.teamManager, managerId: e.managerId || null } }).then(reloadLoaded)),
+      update: (e) => fire("/employees", api("/employees/" + e.id, { method: "PUT", body: { name: e.name, email: e.email || null, role: e.role, company: e.company, start: e.start, term: e.term, streamLead: !!e.streamLead, viewer: !!e.viewer, inactive: !!e.inactive, custom: e.custom || {}, teamManager: !!e.teamManager, managerId: e.managerId || null } })),
     });
   };
   // Admin grants go through their own endpoint (not PUT /employees), so update local state directly.

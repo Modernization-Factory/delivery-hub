@@ -334,6 +334,67 @@ function canDeletePastLeave(role) {
 function canLogCompOff(can, own) {
   return can("leave.compoff") || (!!own && can("leave.compoffOwn"));
 }
+
+// ---- Reporting lines (mirrors web/src/lib/reporting.js) ----
+// Employees here are { id, name, role, isAdmin, inactive, teamManager, managerId } with string
+// ids. Only a flagged team manager can be reported to; a flagged manager sees themselves and
+// their whole reporting chain. PMs and Admins see the whole team, so they are never managers.
+function canBeTeamManager(e) {
+  return !!e && e.role !== "Project Manager" && !e.isAdmin;
+}
+function isTeamManager(e) {
+  return !!(e && e.teamManager) && canBeTeamManager(e);
+}
+function reporteesOf(employees, id) {
+  return employees.filter((e) => e.managerId && e.managerId === id);
+}
+// everyone below `id`, however many levels down; safe against a loop in stored data
+function reportingChain(employees, id) {
+  const below = new Set();
+  const queue = [id];
+  while (queue.length) {
+    const cur = queue.shift();
+    employees.forEach((e) => {
+      if (e.managerId === cur && e.id !== id && !below.has(e.id)) {
+        below.add(e.id);
+        queue.push(e.id);
+      }
+    });
+  }
+  return below;
+}
+// managers above `id`, nearest first
+function managersAbove(employees, id) {
+  const byId = Object.fromEntries(employees.map((e) => [e.id, e]));
+  const out = [];
+  let cur = byId[id];
+  while (cur && cur.managerId && !out.includes(cur.managerId) && cur.managerId !== id) {
+    out.push(cur.managerId);
+    cur = byId[cur.managerId];
+  }
+  return out;
+}
+// the reason a proposed employee record breaks the reporting rules, or null
+function reportingError(employees, next) {
+  const prev = next.id ? employees.find((e) => e.id === next.id) : null;
+  if (next.teamManager && !canBeTeamManager(next)) {
+    return { error: "team_manager_ineligible", detail: "A Project Manager or Admin can't be a team manager — they already see the whole team." };
+  }
+  if (prev && prev.teamManager && !next.teamManager) {
+    const still = reporteesOf(employees, prev.id);
+    if (still.length) return { error: "has_reportees", detail: still.map((e) => e.name).sort().join(", ") + (still.length === 1 ? " still reports" : " still report") + " to " + prev.name + " — assign them another manager first." };
+  }
+  if (next.managerId) {
+    if (next.id && next.managerId === next.id) return { error: "self_manager", detail: "Someone can't report to themselves." };
+    const mgr = employees.find((e) => e.id === next.managerId);
+    if (!mgr) return { error: "manager_not_found", detail: "That manager isn't in the employee master." };
+    if (!isTeamManager(mgr)) return { error: "manager_not_flagged", detail: mgr.name + " isn't flagged as a team manager." };
+    const changed = !prev || prev.managerId !== next.managerId;
+    if (changed && mgr.inactive) return { error: "manager_inactive", detail: mgr.name + " is inactive — pick an active manager." };
+    if (next.id && reportingChain(employees, next.id).has(mgr.id)) return { error: "reporting_loop", detail: mgr.name + " already reports to " + (next.name || "this person") + ", directly or further down — that would make a loop." };
+  }
+  return null;
+}
 // effective app role: Lead Developer OR designated Stream Lead -> Lead
 function appRoleForEmp(e) {
   if (e.viewer) return "Viewer"; // read-only persona, regardless of PS role
@@ -763,6 +824,7 @@ module.exports = {
   parseISO, toISO, isWeekend, isWorkingDay, workingDaysBetween, monthRange,
   leaveDays, leaveDaysInRange, isDuplicate, findOverlaps, compOffDateValid, balancesFor, onLeaveOn,
   isActiveDuring, appRoleOf, appRoleForEmp, compOffTypeName, tcWeekDays, onLeaveWholeWeek, canDeletePastLeave, canLogCompOff,
+  canBeTeamManager, isTeamManager, reporteesOf, reportingChain, managersAbove, reportingError,
   tcStats, tcStatsFlex, weekCompliance, weekComplianceFlex, tcSuggested,
   excelToISO, parseTimecardGrid,
   aOverlaps, crossProjectConcurrent, activeAssignmentsOn, effortSplitInMonth, assignmentDaysInMonth, streamsInMonth, currentStream,

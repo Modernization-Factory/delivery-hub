@@ -56,6 +56,15 @@ test("a Developer / Senior Developer comp-off page shows only their own entries"
   assert.ok(pm.includes("Comp-Off Earned") && pm.includes("All companies") && pm.includes(">Employee<"), "a PM keeps the full ledger");
 });
 
+test("Employees shows reporting lines, team managers and reportees of an inactive manager", () => {
+  // server rendering puts <!-- --> between adjacent text pieces; drop them to match on the visible text
+  const html = harness.renderScreen("EmployeesWithReporting").replace(/<!-- -->/g, "");
+  assert.ok(html.includes("Reports to"), "Reports to column");
+  assert.ok(html.includes("Team Manager · 1"), "Ravi flagged with one reportee");
+  assert.ok(html.includes("manager inactive"), "Mia's manager is inactive");
+  assert.ok(html.includes("1 active person reports to an inactive manager — Mia (Old Hand)"), "reassignment warning");
+});
+
 test("the harness covers every screen module in src/views", async () => {
   const fs = await import("node:fs");
   const views = fs.readdirSync(path.join(root, "src/views")).filter((f) => f.endsWith(".jsx"));
