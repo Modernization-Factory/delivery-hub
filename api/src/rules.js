@@ -92,9 +92,20 @@ function balancesFor(name, leaves, comps, leaveTypes, weekendDays, holidaySet) {
       const d = leaveDays(l.start, l.end, l.type, leaveTypes, weekendDays, holidaySet);
       byType[l.type] = (byType[l.type] || 0) + d;
     });
-  const earned = comps.filter((c) => c.name === name).reduce((s, c) => s + Number(c.days), 0);
+  // only approved comp-off is earned; pending days wait for a manager and can't be spent yet
+  const mine = comps.filter((c) => c.name === name);
+  const sum = (st) => mine.filter((c) => compOffStatus(c) === st).reduce((s, c) => s + Number(c.days), 0);
+  const earned = sum("approved");
   const used = byType[compOffTypeName(leaveTypes)] || 0;
-  return { byType, compOffEarned: earned, compOffUsed: used, compOffBalance: earned - used };
+  return { byType, compOffEarned: earned, compOffPending: sum("pending"), compOffUsed: used, compOffBalance: earned - used };
+}
+// entries from before approval existed carry no status — they count as approved
+function compOffStatus(c) {
+  return (c && c.status) || "approved";
+}
+// a self-logged entry waits for a manager; one logged by someone else (or by an Admin) is approved
+function newCompOffStatus(self, isAdmin) {
+  return self && !isAdmin ? "pending" : "approved";
 }
 // employee active during [rangeStart, rangeEnd]? (start before range ends, end date not before range starts)
 function isActiveDuring(e, rangeStart, rangeEnd) {
@@ -330,6 +341,81 @@ function ragOf(score, cfg) {
 function canDeletePastLeave(role) {
   return role === "Project Manager" || role === "Admin";
 }
+// log / delete a comp-off entry: anyone's with leave.compoff, your own with leave.compoffOwn
+function canLogCompOff(can, own) {
+  return can("leave.compoff") || (!!own && can("leave.compoffOwn"));
+}
+
+// ---- Reporting lines (mirrors web/src/lib/reporting.js) ----
+// Employees here are { id, name, role, isAdmin, inactive, teamManager, managerId } with string
+// ids. Only a flagged team manager can be reported to; a flagged manager sees themselves and
+// their whole reporting chain. PMs and Admins see the whole team, so they are never managers.
+function canBeTeamManager(e) {
+  return !!e && e.role !== "Project Manager" && !e.isAdmin;
+}
+function isTeamManager(e) {
+  return !!(e && e.teamManager) && canBeTeamManager(e);
+}
+function reporteesOf(employees, id) {
+  return employees.filter((e) => e.managerId && e.managerId === id);
+}
+// everyone below `id`, however many levels down; safe against a loop in stored data
+function reportingChain(employees, id) {
+  const below = new Set();
+  const queue = [id];
+  while (queue.length) {
+    const cur = queue.shift();
+    employees.forEach((e) => {
+      if (e.managerId === cur && e.id !== id && !below.has(e.id)) {
+        below.add(e.id);
+        queue.push(e.id);
+      }
+    });
+  }
+  return below;
+}
+// managers above `id`, nearest first
+function managersAbove(employees, id) {
+  const byId = Object.fromEntries(employees.map((e) => [e.id, e]));
+  const out = [];
+  let cur = byId[id];
+  while (cur && cur.managerId && !out.includes(cur.managerId) && cur.managerId !== id) {
+    out.push(cur.managerId);
+    cur = byId[cur.managerId];
+  }
+  return out;
+}
+// Who may approve or reject a pending comp-off: an Admin for anyone; otherwise a flagged team
+// manager (with leave.compoffApprove) anywhere above that person in the reporting chain —
+// never for their own entry. `approver` is { id, role (app role), teamManager }.
+function canDecideCompOff(approver, employees, targetId, can) {
+  if (!approver) return false;
+  if (approver.role === "Admin") return true;
+  if (!approver.teamManager || !can("leave.compoffApprove")) return false;
+  if (!targetId || targetId === approver.id) return false;
+  return managersAbove(employees, targetId).includes(approver.id);
+}
+// the reason a proposed employee record breaks the reporting rules, or null
+function reportingError(employees, next) {
+  const prev = next.id ? employees.find((e) => e.id === next.id) : null;
+  if (next.teamManager && !canBeTeamManager(next)) {
+    return { error: "team_manager_ineligible", detail: "A Project Manager or Admin can't be a team manager — they already see the whole team." };
+  }
+  if (prev && prev.teamManager && !next.teamManager) {
+    const still = reporteesOf(employees, prev.id);
+    if (still.length) return { error: "has_reportees", detail: still.map((e) => e.name).sort().join(", ") + (still.length === 1 ? " still reports" : " still report") + " to " + prev.name + " — assign them another manager first." };
+  }
+  if (next.managerId) {
+    if (next.id && next.managerId === next.id) return { error: "self_manager", detail: "Someone can't report to themselves." };
+    const mgr = employees.find((e) => e.id === next.managerId);
+    if (!mgr) return { error: "manager_not_found", detail: "That manager isn't in the employee master." };
+    if (!isTeamManager(mgr)) return { error: "manager_not_flagged", detail: mgr.name + " isn't flagged as a team manager." };
+    const changed = !prev || prev.managerId !== next.managerId;
+    if (changed && mgr.inactive) return { error: "manager_inactive", detail: mgr.name + " is inactive — pick an active manager." };
+    if (next.id && reportingChain(employees, next.id).has(mgr.id)) return { error: "reporting_loop", detail: mgr.name + " already reports to " + (next.name || "this person") + ", directly or further down — that would make a loop." };
+  }
+  return null;
+}
 // effective app role: Lead Developer OR designated Stream Lead -> Lead
 function appRoleForEmp(e) {
   if (e.viewer) return "Viewer"; // read-only persona, regardless of PS role
@@ -344,53 +430,55 @@ function appRoleForEmp(e) {
 // S falls back to D when omitted)
 const PERM_GROUPS = [
   { module: "Leave", caps: [
-    ["leave.own", "Submit own leave · delete own entries", { D: 1, L: 1, P: 1, V: 0 }],
-    ["leave.records", "View all leave records", { D: 0, L: 1, P: 1, V: 1 }],
-    ["leave.forAnyone", "File / delete leave for anyone", { D: 0, L: 1, P: 1, V: 0 }],
-    ["leave.compoff", "Log & manage comp-off earned", { D: 0, L: 1, P: 1, V: 0 }],
-    ["leave.reports", "Leave reports (role / company / project totals)", { D: 0, L: 1, P: 1, V: 1 }],
-    ["settings.edit", "Leave settings (types · weekends · holidays)", { D: 0, L: 0, P: 1, V: 0 }],
+    ["leave.own", "Submit own leave · delete own entries", { D: 1, L: 1, P: 1, V: 0, M: 1 }],
+    ["leave.records", "View all leave records", { D: 0, L: 1, P: 1, V: 1, M: 1 }],
+    ["leave.forAnyone", "File / delete leave for anyone", { D: 0, L: 1, P: 1, V: 0, M: 1 }],
+    ["leave.compoffOwn", "Log own comp-off earned · delete own entries", { D: 1, L: 1, P: 1, V: 0, M: 1 }],
+    ["leave.compoff", "Log & manage comp-off for anyone (full ledger)", { D: 0, L: 1, P: 1, V: 0, M: 1 }],
+    ["leave.compoffApprove", "Approve / reject pending comp-off for your reporting chain (team managers)", { D: 0, L: 0, P: 0, V: 0, M: 1 }],
+    ["leave.reports", "Leave reports (role / company / project totals)", { D: 0, L: 1, P: 1, V: 1, M: 1 }],
+    ["settings.edit", "Leave settings (types · weekends · holidays)", { D: 0, L: 0, P: 1, V: 0, M: 0 }],
   ]},
   { module: "Timecard", caps: [
-    ["timecard.editAll", "Edit full grid · import weekly file · add weeks", { D: 0, L: 1, P: 1, V: 0 }],
-    ["timecard.insights", "Timecard insights & compliance", { D: 0, L: 1, P: 1, V: 1 }],
-    ["timecard.flag", "Flag outlier weeks & comment on them", { D: 0, L: 1, P: 1, V: 0 }],
+    ["timecard.editAll", "Edit full grid · import weekly file · add weeks", { D: 0, L: 0, P: 1, V: 0, M: 0 }],
+    ["timecard.insights", "Timecard insights & compliance", { D: 0, L: 1, P: 1, V: 1, M: 1 }],
+    ["timecard.flag", "Flag outlier weeks & comment on them", { D: 0, L: 0, P: 1, V: 0, M: 0 }],
   ]},
   { module: "Allocations & Projects", caps: [
-    ["alloc.view", "View allocations (plan · roster · burn)", { D: 0, L: 1, P: 1, V: 1 }],
-    ["alloc.edit", "Create / end / delete assignments", { D: 0, L: 1, P: 1, V: 0 }],
-    ["projects.view", "View project master", { D: 0, L: 1, P: 1, V: 1 }],
-    ["projects.manage", "Manage projects (names · phases · streams · JIRA setting)", { D: 0, L: 0, P: 1, V: 0 }],
-    ["projects.raid", "Manage RAID log & milestones on projects", { D: 0, L: 1, P: 1, V: 0 }],
+    ["alloc.view", "View allocations (plan · roster · burn)", { D: 0, L: 1, P: 1, V: 1, M: 1 }],
+    ["alloc.edit", "Create / end / delete assignments", { D: 0, L: 1, P: 1, V: 0, M: 0 }],
+    ["projects.view", "View project master", { D: 0, L: 1, P: 1, V: 1, M: 0 }],
+    ["projects.manage", "Manage projects (names · phases · streams · JIRA setting)", { D: 0, L: 0, P: 1, V: 0, M: 0 }],
+    ["projects.raid", "Manage RAID log & milestones on projects", { D: 0, L: 1, P: 1, V: 0, M: 0 }],
   ]},
   { module: "Team Plans", caps: [
-    ["plans.view", "View team plans & manage grid", { D: 0, L: 1, P: 1, V: 1 }],
-    ["plans.manage", "Create / update / archive / delete team plans", { D: 0, L: 1, P: 1, V: 0 }],
+    ["plans.view", "View team plans & manage grid", { D: 0, L: 1, P: 1, V: 1, M: 0 }],
+    ["plans.manage", "Create / update / archive / delete team plans", { D: 0, L: 1, P: 1, V: 0, M: 0 }],
   ]},
   { module: "Program Health", caps: [
-    ["ph.view", "View program health (portfolio · weekly · pipeline)", { D: 0, L: 1, P: 1, V: 1 }],
-    ["ph.register", "Edit PM-maintained project fields (stories · current margin · key update)", { D: 0, L: 0, P: 1, V: 0 }],
-    ["ph.weekly", "Submit & edit weekly health entries", { D: 0, L: 0, P: 1, V: 0 }],
-    ["ph.pipeline", "Manage the pipeline board", { D: 0, L: 0, P: 1, V: 0 }],
+    ["ph.view", "View program health (portfolio · weekly · pipeline)", { D: 0, L: 1, P: 1, V: 1, M: 0 }],
+    ["ph.register", "Edit PM-maintained project fields (stories · current margin · key update)", { D: 0, L: 0, P: 1, V: 0, M: 0 }],
+    ["ph.weekly", "Submit & edit weekly health entries", { D: 0, L: 0, P: 1, V: 0, M: 0 }],
+    ["ph.pipeline", "Manage the pipeline board", { D: 0, L: 0, P: 1, V: 0, M: 0 }],
   ]},
   { module: "Performance", caps: [
-    ["perf.view", "View performance · watchlist", { D: 0, L: 1, P: 1, V: 1 }],
-    ["perf.score", "Enter & edit weekly scores", { D: 0, L: 1, P: 1, V: 0 }],
-    ["perf.reports", "Performance reports & exports (Excel · PDF)", { D: 0, L: 1, P: 1, V: 1 }],
-    ["perf.config", "Scoring configuration (weights · RAG · scope)", { D: 0, L: 0, P: 0, V: 0 }],
+    ["perf.view", "View performance · watchlist", { D: 0, L: 1, P: 1, V: 1, M: 1 }],
+    ["perf.score", "Enter & edit weekly scores", { D: 0, L: 1, P: 1, V: 0, M: 0 }],
+    ["perf.reports", "Performance reports & exports (Excel · PDF)", { D: 0, L: 1, P: 1, V: 1, M: 1 }],
+    ["perf.config", "Scoring configuration (weights · RAG · scope)", { D: 0, L: 0, P: 0, V: 0, M: 0 }],
   ]},
   { module: "Runway", caps: [
-    ["runway.view", "View remaining runway (weeks · days · last date)", { D: 0, L: 1, P: 1, V: 1 }],
-    ["runway.funding", "Manage funding hours & remaining overrides", { D: 0, L: 0, P: 1, V: 0 }],
+    ["runway.view", "View remaining runway (weeks · days · last date)", { D: 0, L: 1, P: 1, V: 1, M: 0 }],
+    ["runway.funding", "Manage funding hours & remaining overrides", { D: 0, L: 0, P: 1, V: 0, M: 0 }],
   ]},
   { module: "People", caps: [
-    ["employees.view", "View employee master", { D: 0, L: 1, P: 1, V: 1 }],
-    ["employees.edit", "Edit employee master · Stream Leads · Viewers", { D: 0, L: 0, P: 1, V: 0 }],
+    ["employees.view", "View employee master", { D: 0, L: 1, P: 1, V: 1, M: 1 }],
+    ["employees.edit", "Edit employee master · Stream Leads · Viewers", { D: 0, L: 0, P: 1, V: 0, M: 0 }],
   ]},
 ];
 function defaultPerms() {
   const o = {};
-  PERM_GROUPS.forEach((g) => g.caps.forEach(([id, _l, d]) => { o[id] = { Developer: !!d.D, "Senior Developer": !!(d.S ?? d.D), Lead: !!d.L, "Project Manager": !!d.P, Viewer: !!d.V }; }));
+  PERM_GROUPS.forEach((g) => g.caps.forEach(([id, _l, d]) => { o[id] = { Developer: !!d.D, "Senior Developer": !!(d.S ?? d.D), Lead: !!d.L, "Project Manager": !!d.P, Viewer: !!d.V, "Team Manager": !!d.M }; }));
   return o;
 }
 // stored permission docs from before a capability/role existed lack keys — merge defaults under them
@@ -409,6 +497,17 @@ function canDo(perms, role, cap) {
   if (role === "Admin") return true;
   const p = perms[cap];
   return p ? !!p[role] : false;
+}
+
+// A flagged team manager isn't a role: they keep their role's capabilities and add the
+// "Team Manager" column of the matrix, all limited to their reporting chain. Project screens
+// are worked out from everyone on a project, so a chain-limited view of them would be wrong —
+// those capabilities are off for a team manager whatever their role or the matrix says.
+const PROJECT_CAPS = ["projects.view", "projects.manage", "projects.raid", "plans.view", "plans.manage", "ph.view", "ph.register", "ph.weekly", "ph.pipeline", "runway.view", "runway.funding"];
+function effectiveCan(perms, role, teamManager, cap) {
+  if (role === "Admin" || !teamManager) return canDo(perms, role, cap);
+  if (PROJECT_CAPS.includes(cap)) return false;
+  return canDo(perms, role, cap) || canDo(perms, "Team Manager", cap);
 }
 // ---- Performance report builders (pure, testable) ----
 const PARTNER_COS = ["WeKan", "Ciklum", "Globant"];
@@ -756,14 +855,15 @@ function computeBurn(assignments, employees, empByName, year, weekendDays, holid
 module.exports = {
   TC_STATUSES, METRICS, STREAMS, NAME_ALIASES, PERM_GROUPS, PARTNER_COS, OPEN_END, RUNWAY_ROLES,
   parseISO, toISO, isWeekend, isWorkingDay, workingDaysBetween, monthRange,
-  leaveDays, leaveDaysInRange, isDuplicate, findOverlaps, compOffDateValid, balancesFor, onLeaveOn,
-  isActiveDuring, appRoleOf, appRoleForEmp, compOffTypeName, tcWeekDays, onLeaveWholeWeek, canDeletePastLeave,
+  leaveDays, leaveDaysInRange, isDuplicate, findOverlaps, compOffDateValid, balancesFor, compOffStatus, newCompOffStatus, onLeaveOn,
+  isActiveDuring, appRoleOf, appRoleForEmp, compOffTypeName, tcWeekDays, onLeaveWholeWeek, canDeletePastLeave, canLogCompOff,
+  canBeTeamManager, isTeamManager, reporteesOf, reportingChain, managersAbove, reportingError, canDecideCompOff,
   tcStats, tcStatsFlex, weekCompliance, weekComplianceFlex, tcSuggested,
   excelToISO, parseTimecardGrid,
   aOverlaps, crossProjectConcurrent, activeAssignmentsOn, effortSplitInMonth, assignmentDaysInMonth, streamsInMonth, currentStream,
   computeBurn,
   weightedScore, starsOf, ragOf, perfScorecard, perfVendorTrend, perfResourceTrend,
-  defaultPerms, canDo, mergePerms,
+  defaultPerms, canDo, mergePerms, effectiveCan, PROJECT_CAPS,
   runwayRoleOf, weekAnchor, addWorkingDays, consumedByProjectRole, computeRunway,
   leaveByProjectRole, planCalc, planMonths, pageSlice,
   phElapsedPct, phEffortVar, phBurnVsPlan, phScheduleVar, phHighRisks, PH_STAGES,

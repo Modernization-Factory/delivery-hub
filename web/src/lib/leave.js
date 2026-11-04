@@ -72,9 +72,20 @@ export function balancesFor(name, leaves, comps, leaveTypes, weekendDays, holida
       const d = leaveDays(l.start, l.end, l.type, leaveTypes, weekendDays, holidaySet);
       byType[l.type] = (byType[l.type] || 0) + d;
     });
-  const earned = comps.filter((c) => c.name === name).reduce((s, c) => s + Number(c.days), 0);
+  // only approved comp-off is earned; pending days wait for a manager and can't be spent yet
+  const mine = comps.filter((c) => c.name === name);
+  const sum = (st) => mine.filter((c) => compOffStatus(c) === st).reduce((s, c) => s + Number(c.days), 0);
+  const earned = sum("approved");
   const used = byType[compOffTypeName(leaveTypes)] || 0;
-  return { byType, compOffEarned: earned, compOffUsed: used, compOffBalance: earned - used };
+  return { byType, compOffEarned: earned, compOffPending: sum("pending"), compOffUsed: used, compOffBalance: earned - used };
+}
+// entries from before approval existed carry no status — they count as approved
+export function compOffStatus(c) {
+  return (c && c.status) || "approved";
+}
+// a self-logged entry waits for a manager; one logged by someone else (or by an Admin) is approved
+export function newCompOffStatus(self, isAdmin) {
+  return self && !isAdmin ? "pending" : "approved";
 }
 
 // employee active during [rangeStart, rangeEnd]? (start before range ends, end date not before range starts)

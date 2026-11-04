@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { pageSlice } from "../src/lib/paging.js";
 import { planCalc, planMonths } from "../src/lib/plans.js";
 import { appRoleOf } from "../src/lib/roles.js";
-import { canDo, defaultPerms, mergePerms, appRoleForEmp, canDeletePastLeave, canSeeWorkingDays, ROLES } from "../src/lib/permissions.js";
+import { canDo, defaultPerms, effectiveCan, mergePerms, appRoleForEmp, canDeletePastLeave, canLogCompOff, canSeeWorkingDays, PERM_GROUPS, PROJECT_CAPS, ROLES } from "../src/lib/permissions.js";
 import { perfResourceTrend, perfScorecard, perfVendorTrend, ragOf, starsOf, weightedScore } from "../src/lib/performance.js";
 import { PERF_CFG } from "./fixtures.js";
 
@@ -71,8 +71,71 @@ test("mergePerms keeps stored overrides but backfills new capabilities", () => {
   const merged = mergePerms(stored);
   assert.equal(canDo(merged, "Developer", "leave.own"), false); // override respected
   assert.equal(canDo(merged, "Lead", "leave.own"), true); // untouched roles keep the default
-  assert.equal(canDo(merged, "Developer", "timecard.editAll"), false);
-  assert.equal(canDo(merged, "Lead", "timecard.editAll"), true); // default for a cap the store never saw
+  assert.equal(canDo(merged, "Developer", "alloc.edit"), false);
+  assert.equal(canDo(merged, "Lead", "alloc.edit"), true); // default for a cap the store never saw
+});
+
+test("Developers and Senior Developers log their own comp-off without the full ledger", () => {
+  const perms = defaultPerms();
+  const as = (role, p = perms) => (cap) => canDo(p, role, cap);
+  for (const role of ["Developer", "Senior Developer"]) {
+    assert.equal(canDo(perms, role, "leave.compoffOwn"), true, role);
+    assert.equal(canDo(perms, role, "leave.compoff"), false, role); // no ledger, no logging for others
+    assert.equal(canLogCompOff(as(role), true), true, role);
+    assert.equal(canLogCompOff(as(role), false), false, role);
+  }
+  assert.equal(canLogCompOff(as("Lead"), false), true); // the full ledger reaches anyone's entry
+  assert.equal(canLogCompOff(as("Viewer"), true), false);
+  // a stored matrix from before compoffOwn existed gets the default; an explicit revoke sticks
+  assert.equal(canDo(mergePerms({ "leave.compoff": { Developer: false } }), "Developer", "leave.compoffOwn"), true);
+  assert.equal(canLogCompOff(as("Developer", mergePerms({ "leave.compoffOwn": { Developer: false } })), true), false);
+});
+
+test("a flagged team manager keeps their role, adds the Team Manager column, loses project screens", () => {
+  const P = defaultPerms();
+  // a Developer gains the manager screens: view + approve + file leave / comp-off for reportees
+  for (const cap of ["leave.records", "leave.reports", "leave.forAnyone", "leave.compoff", "timecard.insights", "perf.view", "employees.view", "alloc.view"]) {
+    assert.equal(effectiveCan(P, "Developer", false, cap), false, "unflagged Developer " + cap);
+    assert.equal(effectiveCan(P, "Developer", true, cap), true, "flagged Developer " + cap);
+  }
+  // ...but not the actions left out of the manager column
+  for (const cap of ["timecard.flag", "timecard.editAll", "perf.score", "alloc.edit", "employees.edit", "settings.edit"]) {
+    assert.equal(effectiveCan(P, "Developer", true, cap), false, "flagged Developer " + cap);
+  }
+  // a flagged Lead keeps every Lead capability except the project screens
+  assert.equal(effectiveCan(P, "Lead", true, "alloc.edit"), true);
+  assert.equal(effectiveCan(P, "Lead", true, "perf.score"), true);
+  assert.equal(effectiveCan(P, "Lead", true, "timecard.editAll"), false); // PM / Admin only, flagged or not
+  for (const cap of PROJECT_CAPS) {
+    assert.equal(effectiveCan(P, "Lead", false, cap), canDo(P, "Lead", cap), "unflagged Lead unchanged: " + cap);
+    assert.equal(effectiveCan(P, "Lead", true, cap), false, "flagged Lead " + cap);
+    assert.equal(effectiveCan(P, "Viewer", true, cap), false, "flagged Viewer " + cap);
+  }
+  // project screens stay off even if an Admin ticks them in the Team Manager column
+  const ticked = { ...P, "runway.view": { ...P["runway.view"], "Team Manager": true } };
+  assert.equal(effectiveCan(ticked, "Developer", true, "runway.view"), false);
+  // unflagged people and Admins are exactly as before
+  for (const g of PERM_GROUPS) for (const [cap] of g.caps) {
+    for (const role of ["Developer", "Senior Developer", "Lead", "Project Manager", "Viewer"]) assert.equal(effectiveCan(P, role, false, cap), canDo(P, role, cap), role + " " + cap);
+    assert.equal(effectiveCan(P, "Admin", true, cap), true, "Admin " + cap);
+  }
+});
+
+test("the Team Manager column is backfilled into a matrix saved before it existed", () => {
+  const merged = mergePerms({ "leave.records": { Developer: false, Lead: true } });
+  assert.equal(merged["leave.records"]["Team Manager"], true);
+  assert.equal(merged["runway.view"]["Team Manager"], false);
+});
+
+test("the API's permission registry matches the app's, Team Manager column included", async () => {
+  const { createRequire } = await import("node:module");
+  const R = createRequire(import.meta.url)("../../api/src/rules.js");
+  assert.deepEqual(R.defaultPerms(), defaultPerms());
+  assert.deepEqual(R.PROJECT_CAPS, PROJECT_CAPS);
+  const P = defaultPerms();
+  for (const g of PERM_GROUPS) for (const [cap] of g.caps) for (const role of ["Developer", "Lead", "Viewer"]) for (const tm of [false, true]) {
+    assert.equal(R.effectiveCan(P, role, tm, cap), effectiveCan(P, role, tm, cap), role + " " + tm + " " + cap);
+  }
 });
 
 test("the working-days report is a PM / Admin tool — no other role sees it", () => {
@@ -163,10 +226,16 @@ test("only PM and Admin can delete leave whose start date has passed", () => {
   ["Lead", "Senior Developer", "Developer", "Viewer"].forEach((r) => assert.equal(canDeletePastLeave(r), false));
 });
 
-test("timecard.flag defaults to Lead and PM, not Developer, Senior Developer or Viewer", () => {
+// Only PMs and Admins change timecards: statuses, import, add week and outlier flags.
+// Leads still see the grid and insights (timecard.insights), they just don't edit.
+test("timecard editing and flagging default to PM (and Admin) only", () => {
   const perms = defaultPerms();
-  assert.equal(canDo(perms, "Lead", "timecard.flag"), true);
-  assert.equal(canDo(perms, "Project Manager", "timecard.flag"), true);
-  ["Developer", "Senior Developer", "Viewer"].forEach((r) => assert.equal(canDo(perms, r, "timecard.flag"), false));
-  assert.equal(canDo(mergePerms({}), "Lead", "timecard.flag"), true); // backfilled onto stored permission docs
+  for (const cap of ["timecard.editAll", "timecard.flag"]) {
+    assert.equal(canDo(perms, "Project Manager", cap), true, cap);
+    assert.equal(canDo(perms, "Admin", cap), true, cap);
+    ["Developer", "Senior Developer", "Lead", "Viewer", "Team Manager"].forEach((r) => assert.equal(canDo(perms, r, cap), false, r + " " + cap));
+    assert.equal(canDo(mergePerms({}), "Lead", cap), false, "backfilled onto a stored matrix that lacks " + cap);
+    assert.equal(effectiveCan(perms, "Lead", true, cap), false, "a flagged Lead " + cap);
+  }
+  assert.equal(canDo(perms, "Lead", "timecard.insights"), true); // Leads still see the grid
 });

@@ -40,7 +40,7 @@ export function MyLeave(ctx) {
     const days = leaveDays(start, end, type, leaveTypes, weekendDays, holidaySet);
     if (days === 0) return setMsg({ tone: "error", text: "That range has no working days (weekend / holiday only), so no leave is needed." });
     if (type === compOffTypeName(leaveTypes) && bal.compOffBalance < days) {
-      return setMsg({ tone: "error", text: `Comp-off balance is ${bal.compOffBalance} day(s) — not enough for a ${days}-day comp-off leave. Ask your lead to log earned comp-off first.` });
+      return setMsg({ tone: "error", text: `Comp-off balance is ${bal.compOffBalance} day(s) — not enough for a ${days}-day comp-off leave. ` + (bal.compOffPending ? bal.compOffPending + " day(s) are still waiting for approval. " : "") + (target === user.name && ctx.can("leave.compoffOwn") ? "Log the weekend or holiday you worked on the Comp-Off Log page first." : "Log the earned comp-off first.") });
     }
     const overlaps = findOverlaps(leaves, entry);
     if (overlaps.length && !force) {
@@ -66,7 +66,7 @@ export function MyLeave(ctx) {
         ))}
       </div>
       <div className="grid gap-3 sm:grid-cols-3">
-        <Stat label={coName + " earned"} value={bal.compOffEarned} />
+        <Stat label={coName + " earned"} value={bal.compOffEarned} sub={bal.compOffPending ? "+ " + bal.compOffPending + " waiting for approval" : "approved"} />
         <Stat label={coName + " used"} value={bal.compOffUsed} />
         <Stat label={coName + " balance"} value={bal.compOffBalance} sub={bal.compOffBalance < 0 ? "Negative — review entries" : ""} />
       </div>

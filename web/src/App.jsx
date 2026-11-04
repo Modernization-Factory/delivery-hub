@@ -70,7 +70,7 @@ export default function App() {
   }
   async function loadComps(empNameById) {
     const cs = await api("/compoffs").catch((e) => (e.status === 403 ? api("/compoffs?mine=1") : Promise.reject(e)));
-    setComps0(cs.map((c) => ({ id: String(c._id), name: empNameById[String(c.employeeId)], date: dstr(c.dateWorked), days: c.days, reason: c.reason || "" })).filter((c) => c.name));
+    setComps0(cs.map((c) => ({ id: String(c._id), name: empNameById[String(c.employeeId)], date: dstr(c.dateWorked), days: c.days, reason: c.reason || "", status: c.status || "approved", createdBy: c.createdBy || "", decidedBy: c.decidedBy || "", decisionNote: c.decisionNote || "" })).filter((c) => c.name));
   }
   async function loadTimecards(empNameById) {
     const docs = await api("/timecards").catch((e) => (e.status === 403 ? api("/timecards?mine=1") : Promise.reject(e)));
@@ -124,7 +124,7 @@ export default function App() {
   async function loadEmployees() {
     const es = await api("/employees").catch(() => null);
     if (!es) return empNameByIdNow();
-    setEmployees0(es.map((e) => ({ id: String(e.id), name: e.name, email: e.email || "", role: e.role, company: e.company, start: e.start, term: e.term, streamLead: !!e.streamLead, viewer: !!e.viewer, isAdmin: !!e.isAdmin, inactive: !!e.inactive, custom: e.custom || {} })));
+    setEmployees0(es.map((e) => ({ id: String(e.id), name: e.name, email: e.email || "", role: e.role, company: e.company, start: e.start, term: e.term, streamLead: !!e.streamLead, viewer: !!e.viewer, isAdmin: !!e.isAdmin, inactive: !!e.inactive, custom: e.custom || {}, teamManager: !!e.teamManager, managerId: e.managerId ? String(e.managerId) : null })));
     setSrvMaps((m) => ({ ...m, empIdByName: Object.fromEntries(es.map((e) => [e.name, String(e.id)])) }));
     return Object.fromEntries(es.map((e) => [String(e.id), e.name]));
   }
@@ -188,13 +188,15 @@ export default function App() {
       remove: (c) => fire("/compoffs", api("/compoffs/" + c.id, { method: "DELETE" })),
     });
   };
+  // approve / reject a pending comp-off (the server checks the approver), then reload the ledger
+  const decideCompOff = async (id, decision, note) => { await api("/compoffs/" + id + "/decision", { method: "POST", body: { decision, note } }); await loadComps(empNameByIdNow()); };
   const setEmployees = (next0) => {
     // pickers pass the active-only list — never let that drop inactive employees from state
     const next = [...next0, ...employees.filter((e) => e.inactive && !next0.some((x) => x.id === e.id))];
     const prev = employees; setEmployees0(next);
     diffSync(prev, next, {
-      create: (e) => fire("/employees", api("/employees", { method: "POST", body: { name: e.name, email: e.email || null, role: e.role, company: e.company, start: e.start, term: e.term, streamLead: !!e.streamLead, viewer: !!e.viewer, inactive: !!e.inactive, custom: e.custom || {} } }).then(reloadLoaded)),
-      update: (e) => fire("/employees", api("/employees/" + e.id, { method: "PUT", body: { name: e.name, email: e.email || null, role: e.role, company: e.company, start: e.start, term: e.term, streamLead: !!e.streamLead, viewer: !!e.viewer, inactive: !!e.inactive, custom: e.custom || {} } })),
+      create: (e) => fire("/employees", api("/employees", { method: "POST", body: { name: e.name, email: e.email || null, role: e.role, company: e.company, start: e.start, term: e.term, streamLead: !!e.streamLead, viewer: !!e.viewer, inactive: !!e.inactive, custom: e.custom || {}, teamManager: !!e.teamManager, managerId: e.managerId || null } }).then(reloadLoaded)),
+      update: (e) => fire("/employees", api("/employees/" + e.id, { method: "PUT", body: { name: e.name, email: e.email || null, role: e.role, company: e.company, start: e.start, term: e.term, streamLead: !!e.streamLead, viewer: !!e.viewer, inactive: !!e.inactive, custom: e.custom || {}, teamManager: !!e.teamManager, managerId: e.managerId || null } })),
     });
   };
   // Admin grants go through their own endpoint (not PUT /employees), so update local state directly.
@@ -403,7 +405,7 @@ export default function App() {
       .then((me) => {
         // A saved address that isn't the authenticated (Okta) identity goes back to login.
         if (me.email && me.email !== getIdentity()) throw new Error("identity_mismatch");
-        setUser({ role: me.role, name: me.employee.name }); loadAll(me.role, me.can);
+        setUser({ role: me.role, name: me.employee.name, id: String(me.employee.id), teamManager: !!me.teamManager }); loadAll(me.role, me.can);
       })
       .catch(() => setIdentity(null))
       .finally(() => setRestoring(false));
@@ -425,7 +427,7 @@ export default function App() {
             e.status = 403;
             throw e;
           }
-          setUser({ role: me.role, name: me.employee.name });
+          setUser({ role: me.role, name: me.employee.name, id: String(me.employee.id), teamManager: !!me.teamManager });
           setNav("dash");
           loadAll(me.role, me.can);
         }}
@@ -459,7 +461,7 @@ export default function App() {
     { id: "calendar", label: "Team Calendar", section: "Leave", icon: CalendarDays, show: true },
     { id: "allrecords", label: "Leave Records", section: "Leave", icon: ListChecks, show: can("leave.records") },
     { id: "reports", label: "Leave Reports", section: "Leave", icon: BarChart3, show: can("leave.reports") },
-    { id: "compoff", label: "Comp-Off Log", section: "Leave", icon: Clock, show: can("leave.compoff") },
+    { id: "compoff", label: "Comp-Off Log", section: "Leave", icon: Clock, show: can("leave.compoff") || can("leave.compoffOwn") },
     { id: "timecard", label: isDev ? "My Timecard" : "Timecard Grid", section: "Delivery", icon: Table, show: true },
     { id: "tcsummary", label: "Timecard Insights", section: "Delivery", icon: TrendingUp, show: can("timecard.insights") },
     { id: "alloc", label: "Allocations", section: "Delivery", icon: GitBranch, show: can("alloc.view") },
@@ -478,7 +480,7 @@ export default function App() {
     setTcWeeks, assignments, setAssignments, projects: openProjects, allProjects: projects, setProjects, setProjectClosed, jiraFlags,
     scores, setScores, perfCfg, setPerfCfg, can, perms, setPerms, extLinks, setExtLinks, plans, setPlans, empFields, setEmpFields, raid, setRaid, milestones, setMilestones, weeklyHealth, setWeeklyHealth, pipeline, setPipeline, uploadTimecardFile, setTcFlag,
     todayISO, canManage, canConfigure, isDev, isAdmin,
-    setLeaves, setLeaveComment, updateLeave, setComps, setTcRows, setEmployees, setLeaveTypes, renameLeaveType, setWeekendDays, setHolidays, nextId, setNav, setEmployeeAdmin,
+    setLeaves, setLeaveComment, updateLeave, setComps, decideCompOff, setTcRows, setEmployees, setLeaveTypes, renameLeaveType, setWeekendDays, setHolidays, nextId, setNav, setEmployeeAdmin,
   };
 
   return (
@@ -572,7 +574,7 @@ export default function App() {
           {nav === "calendar" && <TeamCalendar {...ctx} />}
           {nav === "allrecords" && can("leave.records") && <AllLeaveRecords {...ctx} />}
           {nav === "reports" && can("leave.reports") && <LeaveReports {...ctx} />}
-          {nav === "compoff" && can("leave.compoff") && <CompOffLog {...ctx} />}
+          {nav === "compoff" && (can("leave.compoff") || can("leave.compoffOwn")) && <CompOffLog {...ctx} />}
           {nav === "timecard" && <TimecardGrid {...ctx} />}
           {nav === "tcsummary" && can("timecard.insights") && <TimecardInsights {...ctx} />}
           {nav === "alloc" && can("alloc.view") && <AllocationsView {...ctx} />}

@@ -41,5 +41,15 @@ eq("streamlead-role", R.appRoleForEmp({ role: "Senior Developer", streamLead: tr
 eq("compoff-marker", R.compOffTypeName([{ name: "Vacation" }, { name: "TOIL", compOff: true }]), "TOIL");
 eq("past-leave-pm", R.canDeletePastLeave("Project Manager"), true);
 eq("past-leave-lead", R.canDeletePastLeave("Lead"), false);
+// comp-off: Developers log their own; only leave.compoff reaches anyone else's
+const canAs = (role, perms = P) => (cap) => R.canDo(perms, role, cap);
+eq("compoff-own-dev", ["Developer", "Senior Developer", "Lead", "Project Manager"].map((r) => R.canDo(P, r, "leave.compoffOwn")), [true, true, true, true]);
+eq("compoff-own-viewer", R.canDo(P, "Viewer", "leave.compoffOwn"), false);
+eq("compoff-dev-own-entry", R.canLogCompOff(canAs("Developer"), true), true);
+eq("compoff-dev-others-entry", R.canLogCompOff(canAs("Developer"), false), false);
+eq("compoff-sd-others-entry", R.canLogCompOff(canAs("Senior Developer"), false), false);
+eq("compoff-lead-others-entry", R.canLogCompOff(canAs("Lead"), false), true);
+eq("compoff-viewer-own-entry", R.canLogCompOff(canAs("Viewer"), true), false);
+eq("compoff-own-revoked", R.canLogCompOff(canAs("Developer", R.mergePerms({ "leave.compoffOwn": { Developer: false } })), true), false);
 console.log("SERVER RULES TESTS — PASS:", pass, "FAIL:", fail);
 process.exit(fail ? 1 : 0);

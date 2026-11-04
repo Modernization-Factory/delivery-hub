@@ -227,6 +227,21 @@ from that record per request (Stream Leads get Lead access, `isAdmin` grants eve
 finer-grained rights come from the editable capability matrix in the `permissions`
 collection — the same registry the frontend Admin panel edits.
 
+**Team managers and reporting lines.** An employee can be flagged as a *team manager*
+(any role except Project Manager and Admin) and others set to report to them. A flagged
+manager keeps their role's rights, adds the matrix's **Team Manager** column, and sees
+only themselves and their whole reporting chain — on every screen, Team Calendar included.
+Project screens (Projects, Team Plans, Program Health, Runway) are off for them, because
+those numbers come from everyone on a project. The API enforces this: `resolveUser`
+computes the chain per request, people-data reads are filtered to it, and writes for
+anyone outside it are refused (`outside_reporting_chain`).
+
+**Comp-off approval.** Comp-off someone logs for themselves is *pending* until a team
+manager above them in the chain, or an Admin, approves it; only approved days count
+toward a balance, the Working Days report, or comp-off leave (checked server-side too).
+Comp-off logged for someone else is approved straight away. Entries from before approval
+existed carry no status and count as approved.
+
 ---
 
 ## 5. Deployment (Kanopy)
@@ -379,6 +394,19 @@ Two consequences worth holding onto:
 
 Merge to `main`; Drone builds a new image tag and rolls the deployment. Application data lives entirely in MongoDB; no build step touches it, and
 no seed script should be re-run on an established database.
+
+**One-off: timecard editing is PM and Admin only.** Editing timecard statuses, importing
+the weekly file, adding a week and flagging outlier weeks now default to PM (Admin always
+has everything). A permission matrix already saved in Administration keeps its old ticks,
+so run this once per environment after deploying — it unticks every other role for
+`timecard.editAll` and `timecard.flag`, leaves all other capabilities as stored, and is
+safe to re-run:
+
+```bash
+cd api
+MONGODB_URI="<atlas-uri>" DB_NAME="deliveryhub" node scripts/reset-timecard-edit-perms.js           # dry run: lists the changes
+MONGODB_URI="<atlas-uri>" DB_NAME="deliveryhub" node scripts/reset-timecard-edit-perms.js --write
+```
 
 ---
 

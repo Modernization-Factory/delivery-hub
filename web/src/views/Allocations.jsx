@@ -2,7 +2,7 @@ import { useState, useMemo } from "react";
 import { STREAM_COLORS, aOverlaps, activeAssignmentsOn, computeBurn, crossProjectConcurrent } from "../lib/allocations.js";
 import { OPEN_END } from "../lib/constants.js";
 import { fmt, fmtShort, monthRange, parseISO } from "../lib/dates.js";
-import { isActiveDuring, leaveColor, leaveDaysInRange } from "../lib/leave.js";
+import { compOffStatus, isActiveDuring, leaveColor, leaveDaysInRange } from "../lib/leave.js";
 import { canSeeWorkingDays } from "../lib/permissions.js";
 import { reportLeaveTypes, sumAll, sumMonths, workingDaysByMonth } from "../lib/workdays.js";
 import { downloadXlsx } from "../lib/xlsx.js";
@@ -19,6 +19,8 @@ export function AllocationsView(ctx) {
   // the working-days report is a PM / Admin planning tool, and it reads everyone's comp-off,
   // so it needs the full comp-off log too — Leads, Developers and Viewers never see it
   const canWorkingDays = canSeeWorkingDays(ctx.user.role) && ctx.can("leave.compoff");
+  // project burn is worked out from everyone on a project — a team manager sees only their chain
+  const teamManager = !!ctx.user.teamManager;
   const [tab, setTab] = useState("plan"); // plan | roster | burn | wd
   const [year, setYear] = useState(2026);
   const [q, setQ] = useState("");
@@ -83,7 +85,7 @@ export function AllocationsView(ctx) {
         <h2 className="text-xl font-semibold text-slate-900" style={{ fontFamily: BRAND_FONT }}>Allocations</h2>
         <div className="flex flex-wrap gap-2">
           <div className="flex overflow-hidden rounded-lg border border-slate-300">
-            {[["plan", "Plan"], ["roster", "Roster"], ["burn", "Projected Burn"], ...(canWorkingDays ? [["wd", "Working Days"]] : [])].map(([v, lab]) => (
+            {[["plan", "Plan"], ["roster", "Roster"], ...(teamManager ? [] : [["burn", "Projected Burn"]]), ...(canWorkingDays ? [["wd", "Working Days"]] : [])].map(([v, lab]) => (
               <button key={v} onClick={() => setTab(v)}
                 className={"px-4 py-2 text-sm font-medium transition " + (tab === v ? "mdb-btn-primary text-white" : "bg-white text-slate-600 hover:bg-slate-50")}>
                 {lab}
@@ -472,7 +474,7 @@ export function WorkingDaysReport(ctx) {
     .map((l) => ({ l, days: leaveDaysInRange(l, periodStart, periodEnd, leaveTypes, weekendDays, holidaySet) }))
     .filter((x) => x.days > 0)
     .sort((a, b) => a.l.start.localeCompare(b.l.start));
-  const compsIn = (name) => comps.filter((c) => c.name === name && c.date >= periodStart && c.date <= periodEnd).sort((a, b) => a.date.localeCompare(b.date));
+  const compsIn = (name) => comps.filter((c) => c.name === name && compOffStatus(c) === "approved" && c.date >= periodStart && c.date <= periodEnd).sort((a, b) => a.date.localeCompare(b.date));
   const typeOf = (name) => {
     const o = {};
     recordsIn(name).forEach((x) => { o[x.l.type] = (o[x.l.type] || 0) + x.days; });

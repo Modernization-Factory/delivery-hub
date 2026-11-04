@@ -44,6 +44,37 @@ const oid = (v) => {
   return new ObjectId(String(v));
 };
 
+// ---- reporting-chain scope (see auth.js): a flagged team manager reads and writes only for
+// themselves and their reporting chain. req.user.scope is null for everyone else.
+const inScope = (req, employeeId) => !req.user.scope || req.user.scope.has(String(employeeId));
+// a find() filter that keeps only in-scope people's documents
+const scopeQ = (req, field = "employeeId") => (req.user.scope ? { [field]: { $in: [...req.user.scope].map((id) => new ObjectId(id)) } } : {});
+function refuseOutOfScope(req, res, employeeId) {
+  if (inScope(req, employeeId)) return false;
+  res.status(403).json({ error: "outside_reporting_chain", detail: "That person isn't in your reporting chain." });
+  return true;
+}
+// whole-team operations (timecard import, adding a week for everyone, project totals)
+function refuseScoped(req, res) {
+  if (!req.user.scope) return false;
+  res.status(403).json({ error: "team_manager_scope", detail: "Team managers work within their reporting chain — this covers the whole team." });
+  return true;
+}
+
+// days of comp-off leave `employeeId` can still take: approved earned minus comp-off leave
+// already taken (leaving out `ignoreLeaveId` when that leave is being edited)
+async function compOffAvailable(employeeId, leaveTypes, weekendDays, holidaySet, ignoreLeaveId) {
+  const name = "_";
+  const leaves = (await col("leaves").find({ employeeId, ...(ignoreLeaveId ? { _id: { $ne: ignoreLeaveId } } : {}) }).toArray()).map((l) => ({ name, start: iso(l.start), end: iso(l.end), type: l.type }));
+  const comps = (await col("compOffs").find({ employeeId }).toArray()).map((c) => ({ name, days: c.days, status: c.status }));
+  return R.balancesFor(name, leaves, comps, leaveTypes, weekendDays, holidaySet);
+}
+function compOffShortfall(res, bal, days, coName) {
+  if (bal.compOffBalance >= days) return false;
+  res.status(422).json({ error: "insufficient_compoff", detail: coName + " balance is " + bal.compOffBalance + " day(s), not enough for " + days + "." + (bal.compOffPending ? " " + bal.compOffPending + " day(s) are still waiting for approval." : "") });
+  return true;
+}
+
 async function settings() {
   return (await col("settings").findOne({ _id: "global" })) || {};
 }
@@ -54,7 +85,13 @@ function leaveCtx(s) {
     holidaySet: new Set((s.holidays || []).map(iso)),
   };
 }
-const empShape = (e) => ({ id: e._id, name: e.name, email: e.email, role: e.role, streamLead: !!e.streamLead, viewer: !!e.viewer, isAdmin: !!e.isAdmin, inactive: !!e.inactive, company: e.company, start: iso(e.startDate), term: iso(e.endDate), custom: e.custom || {} });
+const mgrOf = (e) => (e.managerId ? String(e.managerId) : null);
+const empShape = (e) => ({ id: e._id, name: e.name, email: e.email, role: e.role, streamLead: !!e.streamLead, viewer: !!e.viewer, isAdmin: !!e.isAdmin, inactive: !!e.inactive, company: e.company, start: iso(e.startDate), term: iso(e.endDate), custom: e.custom || {}, teamManager: !!e.teamManager, managerId: mgrOf(e) });
+// everyone as the reporting rules see them (string ids)
+const orgShape = (e) => ({ id: String(e._id), name: e.name, role: e.role, isAdmin: !!e.isAdmin, inactive: !!e.inactive, teamManager: !!e.teamManager, managerId: mgrOf(e) });
+async function org() {
+  return (await col("employees").find({}, { projection: { name: 1, role: 1, isAdmin: 1, inactive: 1, teamManager: 1, managerId: 1 } }).toArray()).map(orgShape);
+}
 
 // ---------- me ----------
 // `email` is the identity the request was authenticated as (the Okta claim on Kanopy),
@@ -64,22 +101,27 @@ router.get("/me", async (req, res) => {
   // `can`: this user's effective capabilities from the saved matrix, so the app's menus and
   // buttons match what the server will allow (not the built-in defaults)
   const can = Object.fromEntries(Object.keys(req.user.perms).map((cap) => [cap, req.can(cap)]));
-  res.json({ employee: empShape(req.user.employee), role: req.user.role, email: req.user.email, can });
+  res.json({ employee: empShape(req.user.employee), role: req.user.role, email: req.user.email, can, teamManager: !!req.user.teamManager });
 });
 
 // ---------- employees ----------
 // Without employees.view the caller still gets a name directory (no email / custom fields) —
 // every role needs it to resolve names on their own leave, timecard and the team calendar.
-const dirShape = (e) => ({ id: e._id, name: e.name, role: e.role, inactive: !!e.inactive, company: e.company, start: iso(e.startDate), term: iso(e.endDate) });
+const dirShape = (e) => ({ id: e._id, name: e.name, role: e.role, inactive: !!e.inactive, company: e.company, start: iso(e.startDate), term: iso(e.endDate), teamManager: !!e.teamManager, managerId: mgrOf(e) });
 router.get("/employees", async (req, res) => {
-  const all = await col("employees").find().sort({ name: 1 }).toArray();
+  const all = await col("employees").find(scopeQ(req, "_id")).sort({ name: 1 }).toArray();
   res.json(all.map(req.can("employees.view") ? empShape : dirShape));
 });
 router.post("/employees", requireCap("employees.edit"), audit("employee.create"), async (req, res) => {
+  if (refuseScoped(req, res)) return;
   const { name, email, role, company, start, term, streamLead, viewer, inactive, custom } = req.body;
   if (!name || !name.trim()) return res.status(422).json({ error: "name_required" });
   if (await col("employees").findOne({ name: name.trim() })) return res.status(409).json({ error: "duplicate_name" });
-  const doc = { name: name.trim(), email: email ? String(email).toLowerCase() : null, role: role || "Developer", streamLead: !!streamLead, viewer: !!viewer, inactive: !!inactive, custom: custom || {}, isAdmin: false, company: company || "MDB", startDate: day(start), endDate: day(term), createdAt: new Date(), updatedAt: new Date(), updatedBy: req.user.employee.name };
+  const teamManager = !!req.body.teamManager;
+  const managerId = req.body.managerId ? String(oid(req.body.managerId)) : null;
+  const bad = R.reportingError(await org(), { id: null, name: name.trim(), role: role || "Developer", isAdmin: false, teamManager, managerId });
+  if (bad) return res.status(422).json(bad);
+  const doc = { name: name.trim(), email: email ? String(email).toLowerCase() : null, role: role || "Developer", streamLead: !!streamLead, viewer: !!viewer, inactive: !!inactive, custom: custom || {}, isAdmin: false, teamManager, managerId: managerId ? new ObjectId(managerId) : null, company: company || "MDB", startDate: day(start), endDate: day(term), createdAt: new Date(), updatedAt: new Date(), updatedBy: req.user.employee.name };
   const r = await col("employees").insertOne(doc);
   res.status(201).json(empShape({ ...doc, _id: r.insertedId }));
 });
@@ -87,9 +129,20 @@ router.put("/employees/:id", requireCap("employees.edit"), audit("employee.updat
   const { name, email, role, company, start, term, streamLead, viewer, inactive, custom } = req.body;
   if (term && start && term < start) return res.status(422).json({ error: "end_before_start" });
   if (inactive && String(req.params.id) === String(req.user.employee._id)) return res.status(422).json({ error: "cannot_deactivate_self", detail: "You can't mark yourself inactive." });
+  const id = oid(req.params.id);
+  if (refuseOutOfScope(req, res, id)) return;
+  const cur = await col("employees").findOne({ _id: id });
+  if (!cur) return res.status(404).json({ error: "employee_not_found" });
+  // a request that doesn't mention the reporting fields (an older open tab) keeps what's stored
+  const teamManager = req.body.teamManager === undefined ? !!cur.teamManager : !!req.body.teamManager;
+  const managerId = req.body.managerId === undefined ? mgrOf(cur) : req.body.managerId ? String(oid(req.body.managerId)) : null;
+  // reporting lines are set by someone who sees the whole team, never from inside a chain
+  if (req.user.scope && (teamManager !== !!cur.teamManager || managerId !== mgrOf(cur))) return res.status(403).json({ error: "team_manager_scope", detail: "Reporting lines are changed by a PM or Admin." });
+  const bad = R.reportingError(await org(), { id: String(id), name, role, isAdmin: !!cur.isAdmin, teamManager, managerId });
+  if (bad) return res.status(422).json(bad);
   await col("employees").updateOne(
-    { _id: new ObjectId(req.params.id) },
-    { $set: { name, email: email ? String(email).toLowerCase() : null, role, company, streamLead: !!streamLead, viewer: !!viewer, inactive: !!inactive, custom: custom || {}, startDate: day(start), endDate: day(term), updatedAt: new Date(), updatedBy: req.user.employee.name } }
+    { _id: id },
+    { $set: { name, email: email ? String(email).toLowerCase() : null, role, company, streamLead: !!streamLead, viewer: !!viewer, inactive: !!inactive, custom: custom || {}, teamManager, managerId: managerId ? new ObjectId(managerId) : null, startDate: day(start), endDate: day(term), updatedAt: new Date(), updatedBy: req.user.employee.name } }
   );
   res.json({ ok: true });
 });
@@ -98,8 +151,9 @@ router.put("/employees/:id", requireCap("employees.edit"), audit("employee.updat
 router.get("/leaves", async (req, res) => {
   // Full list is readable by every authenticated user — the v1 decision made the
   // team calendar visible to all roles. leave.records gates the management UI, not reads.
+  // A team manager's calendar and records are limited to their reporting chain.
   const mine = req.query.mine === "1";
-  const q = mine ? { employeeId: req.user.employee._id } : {};
+  const q = mine ? { employeeId: req.user.employee._id } : scopeQ(req);
   const leaves = await col("leaves").find(q).sort({ start: -1 }).toArray();
   res.json(leaves.map((l) => ({ id: l._id, employeeId: l.employeeId, start: iso(l.start), end: iso(l.end), type: l.type, comment: l.comment || "" })));
 });
@@ -137,6 +191,7 @@ router.post("/leaves", audit("leave.create"), async (req, res) => {
   const comment = String(req.body.comment || "").trim().slice(0, 300);
   const self = String(employeeId || "") === String(req.user.employee._id) || !employeeId;
   if (!self && !req.can("leave.forAnyone")) return res.status(403).json({ error: "forbidden" });
+  if (!self && refuseOutOfScope(req, res, oid(employeeId))) return;
   const target = self ? req.user.employee : await col("employees").findOne({ _id: new ObjectId(employeeId) });
   if (!target) return res.status(404).json({ error: "employee_not_found" });
   if (target.inactive) return res.status(422).json({ error: "employee_inactive", detail: target.name + " is marked inactive." });
@@ -151,6 +206,8 @@ router.post("/leaves", audit("leave.create"), async (req, res) => {
   if (R.isDuplicate(existing, entry)) return res.status(409).json({ error: "duplicate" });
   const days = R.leaveDays(start, end, type, leaveTypes, weekendDays, holidaySet);
   if (days === 0) return res.status(422).json({ error: "no_working_days" });
+  const coName = R.compOffTypeName(leaveTypes);
+  if (type === coName && compOffShortfall(res, await compOffAvailable(target._id, leaveTypes, weekendDays, holidaySet), days, coName)) return;
   const overlaps = R.findOverlaps(existing, entry);
   if (overlaps.length && !force) return res.status(409).json({ error: "overlap", overlaps });
   await col("leaves").insertOne({ employeeId: target._id, start: day(start), end: day(end), type, ...(comment ? { comment } : {}), createdAt: new Date(), createdBy: req.user.employee.name });
@@ -165,6 +222,7 @@ router.put("/leaves/:id", audit("leave.update"), async (req, res) => {
   if (!l) return res.status(404).json({ error: "not_found" });
   const today = R.toISO(new Date());
   const own = String(l.employeeId) === String(req.user.employee._id);
+  if (!own && refuseOutOfScope(req, res, l.employeeId)) return;
   const manager = R.canDeletePastLeave(req.user.role); // PM / Admin
   if (!manager) {
     if (!own) return res.status(403).json({ error: "forbidden", detail: "Only a PM or Admin can edit someone else's leave." });
@@ -176,7 +234,12 @@ router.put("/leaves/:id", audit("leave.update"), async (req, res) => {
   if (!manager && start < today) return res.status(422).json({ error: "start_in_past", detail: "You can only move your leave to today or later." });
   const { leaveTypes, weekendDays, holidaySet } = leaveCtx(await settings());
   if (!leaveTypes.some((t) => t.name === type)) return res.status(422).json({ error: "unknown_leave_type", detail: "\"" + type + "\" isn't a configured leave type." });
-  if (R.leaveDays(start, end, type, leaveTypes, weekendDays, holidaySet) === 0) return res.status(422).json({ error: "no_working_days" });
+  const days = R.leaveDays(start, end, type, leaveTypes, weekendDays, holidaySet);
+  if (days === 0) return res.status(422).json({ error: "no_working_days" });
+  // only an edit that adds comp-off days is checked, so an old over-drawn leave can still be moved
+  const coName = R.compOffTypeName(leaveTypes);
+  const wasDays = l.type === coName ? R.leaveDays(iso(l.start), iso(l.end), l.type, leaveTypes, weekendDays, holidaySet) : 0;
+  if (type === coName && days > wasDays && compOffShortfall(res, await compOffAvailable(l.employeeId, leaveTypes, weekendDays, holidaySet, l._id), days, coName)) return;
   const emp = await col("employees").findOne({ _id: l.employeeId });
   const others = (await col("leaves").find({ employeeId: l.employeeId, _id: { $ne: l._id } }).toArray()).map((x) => ({ id: String(x._id), name: emp.name, start: iso(x.start), end: iso(x.end), type: x.type }));
   const entry = { name: emp.name, start, end, type };
@@ -192,6 +255,7 @@ router.patch("/leaves/:id/comment", audit("leave.comment"), async (req, res) => 
   if (!l) return res.status(404).json({ error: "not_found" });
   const own = String(l.employeeId) === String(req.user.employee._id);
   if (!own && !req.can("leave.forAnyone")) return res.status(403).json({ error: "forbidden" });
+  if (!own && refuseOutOfScope(req, res, l.employeeId)) return;
   const comment = String((req.body && req.body.comment) || "").trim().slice(0, 300);
   await col("leaves").updateOne({ _id: l._id }, comment ? { $set: { comment, updatedAt: new Date() } } : { $unset: { comment: "" }, $set: { updatedAt: new Date() } });
   res.json({ ok: true });
@@ -201,6 +265,7 @@ router.delete("/leaves/:id", audit("leave.delete"), async (req, res) => {
   if (!l) return res.status(404).json({ error: "not_found" });
   const own = String(l.employeeId) === String(req.user.employee._id);
   if (!own && !req.can("leave.forAnyone")) return res.status(403).json({ error: "forbidden" });
+  if (!own && refuseOutOfScope(req, res, l.employeeId)) return;
   if (R.toISO(l.start) < R.toISO(new Date()) && !R.canDeletePastLeave(req.user.role)) return res.status(403).json({ error: "past_leave_locked", detail: "Leave that has already started can only be deleted by a PM or Admin." });
   await col("leaves").deleteOne({ _id: l._id });
   const autoNA = await syncLeaveNA(l.employeeId);
@@ -212,24 +277,57 @@ router.get("/compoffs", async (req, res) => {
   // everyone can read their own comp-off (for My Leave balances); the full log needs leave.compoff
   const mine = req.query.mine === "1";
   if (!mine && !req.can("leave.compoff")) return res.status(403).json({ error: "forbidden" });
-  const q = mine ? { employeeId: req.user.employee._id } : {};
+  const q = mine ? { employeeId: req.user.employee._id } : scopeQ(req);
   res.json(await col("compOffs").find(q).sort({ dateWorked: -1 }).toArray());
 });
-router.post("/compoffs", requireCap("leave.compoff"), audit("compoff.create"), async (req, res) => {
-  const { employeeId, dateWorked, days, reason } = req.body;
-  if (await col("employees").findOne({ _id: new ObjectId(employeeId), inactive: true })) return res.status(422).json({ error: "employee_inactive" });
+// Own comp-off needs leave.compoffOwn; anyone else's needs leave.compoff (the full ledger).
+// Someone logging only their own can't date it in the future — the day has to have been worked.
+router.post("/compoffs", audit("compoff.create"), async (req, res) => {
+  const { employeeId, dateWorked, reason } = req.body;
+  const days = Number(req.body.days);
+  const self = !employeeId || String(employeeId) === String(req.user.employee._id);
+  if (!R.canLogCompOff(req.can, self)) return res.status(403).json({ error: "forbidden" });
+  const targetId = self ? req.user.employee._id : oid(employeeId);
+  if (refuseOutOfScope(req, res, targetId)) return;
+  if (await col("employees").findOne({ _id: targetId, inactive: true })) return res.status(422).json({ error: "employee_inactive" });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dateWorked || ""))) return res.status(422).json({ error: "invalid_date" });
+  if (days !== 1 && days !== 0.5) return res.status(422).json({ error: "invalid_days", detail: "Earned days must be 1 or 0.5." });
+  if (!req.can("leave.compoff") && dateWorked > R.toISO(new Date())) return res.status(422).json({ error: "future_date", detail: "Comp-off can only be logged for a day already worked." });
   const s = await settings();
   const { weekendDays, holidaySet } = leaveCtx(s);
   if (!R.compOffDateValid(dateWorked, weekendDays, holidaySet)) return res.status(422).json({ error: "not_weekend_or_holiday" });
   try {
-    await col("compOffs").insertOne({ employeeId: new ObjectId(employeeId), dateWorked: day(dateWorked), days: Number(days), reason: reason || null, createdAt: new Date(), createdBy: req.user.employee.name });
+    // self-logged waits for a manager; logged by someone else (or an Admin) is approved
+    const status = R.newCompOffStatus(self, req.user.role === "Admin");
+    await col("compOffs").insertOne({ employeeId: targetId, dateWorked: day(dateWorked), days, reason: reason || null, status, createdAt: new Date(), createdBy: req.user.employee.name });
   } catch (e) {
     return res.status(409).json({ error: "duplicate_entry" });
   }
   res.status(201).json({ ok: true });
 });
-router.delete("/compoffs/:id", requireCap("leave.compoff"), audit("compoff.delete"), async (req, res) => {
-  await col("compOffs").deleteOne({ _id: new ObjectId(req.params.id) });
+// Approve or reject a pending entry: an Admin for anyone, otherwise a team manager anywhere
+// above the person in their reporting chain (never their own). Only approved days can be spent.
+router.post("/compoffs/:id/decision", audit("compoff.decide"), async (req, res) => {
+  const c = await col("compOffs").findOne({ _id: oid(req.params.id) });
+  if (!c) return res.status(404).json({ error: "not_found" });
+  const decision = req.body && req.body.decision;
+  if (decision !== "approve" && decision !== "reject") return res.status(422).json({ error: "invalid_decision", detail: "decision must be approve or reject." });
+  const approver = { id: String(req.user.employee._id), role: req.user.role, teamManager: req.user.teamManager };
+  if (!R.canDecideCompOff(approver, await org(), String(c.employeeId), req.can)) return res.status(403).json({ error: "not_your_approval", detail: "Only a manager above this person in their reporting chain, or an Admin, can decide it." });
+  if (R.compOffStatus(c) !== "pending") return res.status(409).json({ error: "already_decided", status: R.compOffStatus(c) });
+  const note = String((req.body && req.body.note) || "").trim().slice(0, 300);
+  // only a still-pending entry is changed, so two managers deciding at once can't both win
+  const r = await col("compOffs").updateOne({ _id: c._id, status: "pending" }, { $set: { status: decision === "approve" ? "approved" : "rejected", decidedBy: req.user.employee.name, decidedAt: new Date(), ...(note ? { decisionNote: note } : {}) } });
+  if (!r.modifiedCount) return res.status(409).json({ error: "already_decided" });
+  res.json({ ok: true, status: decision === "approve" ? "approved" : "rejected" });
+});
+router.delete("/compoffs/:id", audit("compoff.delete"), async (req, res) => {
+  const c = await col("compOffs").findOne({ _id: oid(req.params.id) });
+  if (!c) return res.status(404).json({ error: "not_found" });
+  const own = String(c.employeeId) === String(req.user.employee._id);
+  if (!R.canLogCompOff(req.can, own)) return res.status(403).json({ error: "forbidden" });
+  if (refuseOutOfScope(req, res, c.employeeId)) return;
+  await col("compOffs").deleteOne({ _id: c._id });
   res.json({ ok: true });
 });
 
@@ -237,7 +335,7 @@ router.delete("/compoffs/:id", requireCap("leave.compoff"), audit("compoff.delet
 router.get("/timecards", async (req, res) => {
   const mine = req.query.mine === "1";
   if (!mine && !req.can("timecard.insights") && !req.can("timecard.editAll") && !req.can("timecard.flag")) return res.status(403).json({ error: "forbidden" });
-  const q = mine ? { employeeId: req.user.employee._id } : {};
+  const q = mine ? { employeeId: req.user.employee._id } : scopeQ(req);
   // outlier flags are a manager's note — only roles that see the whole grid get them
   const proj = req.can("timecard.editAll") || req.can("timecard.insights") || req.can("timecard.flag") ? {} : { projection: { flag: 0 } };
   res.json(await col("timecards").find(q, proj).sort({ week: 1 }).toArray());
@@ -246,6 +344,9 @@ router.put("/timecards/:id", requireCap("timecard.editAll"), audit("timecard.upd
   const { sf, jira } = req.body;
   const valid = (v) => v === null || v === "" || R.TC_STATUSES.includes(v);
   if (!valid(sf) || !valid(jira)) return res.status(422).json({ error: "invalid_status" });
+  const tc = await col("timecards").findOne({ _id: oid(req.params.id) }, { projection: { employeeId: 1 } });
+  if (!tc) return res.status(404).json({ error: "not_found" });
+  if (refuseOutOfScope(req, res, tc.employeeId)) return;
   await col("timecards").updateOne({ _id: new ObjectId(req.params.id) }, { $set: { sf: sf || null, jira: jira || null, updatedAt: new Date(), updatedBy: req.user.employee.name, source: "manual" }, $unset: { autoNA: "" } });
   res.json({ ok: true });
 });
@@ -253,6 +354,9 @@ router.put("/timecards/:id", requireCap("timecard.editAll"), audit("timecard.upd
 router.put("/timecards/:id/flag", requireCap("timecard.flag"), audit("timecard.flag"), async (req, res) => {
   const flagged = !!(req.body && req.body.flagged);
   const comment = String((req.body && req.body.comment) || "").trim().slice(0, 500);
+  const tc = await col("timecards").findOne({ _id: oid(req.params.id) }, { projection: { employeeId: 1 } });
+  if (!tc) return res.status(404).json({ error: "not_found" });
+  if (refuseOutOfScope(req, res, tc.employeeId)) return;
   const r = await col("timecards").updateOne({ _id: new ObjectId(req.params.id) }, flagged
     ? { $set: { flag: { comment, by: req.user.employee.name, at: new Date() } } }
     : { $unset: { flag: "" } });
@@ -260,6 +364,7 @@ router.put("/timecards/:id/flag", requireCap("timecard.flag"), audit("timecard.f
   res.json({ ok: true });
 });
 router.post("/timecards/weeks", requireCap("timecard.editAll"), audit("timecard.addWeek"), async (req, res) => {
+  if (refuseScoped(req, res)) return;
   const last = await col("timecards").find().sort({ week: -1 }).limit(1).toArray();
   const base = last[0] ? R.toISO(last[0].week) : R.toISO(new Date());
   const d = R.parseISO(base);
@@ -273,6 +378,7 @@ router.post("/timecards/weeks", requireCap("timecard.editAll"), audit("timecard.
   res.status(201).json({ ok: true, week: next, rows: people.length });
 });
 router.post("/timecards/import", requireCap("timecard.editAll"), upload.single("file"), audit("timecard.import"), async (req, res) => {
+  if (refuseScoped(req, res)) return;
   const wb = XLSX.read(req.file.buffer, { cellDates: true });
   const wsName = wb.SheetNames.find((n) => n.toLowerCase().includes("proactive")) || wb.SheetNames.find((n) => n.toLowerCase().includes("timecard")) || wb.SheetNames[0];
   const grid = XLSX.utils.sheet_to_json(wb.Sheets[wsName], { header: 1, raw: true, defval: null });
@@ -365,10 +471,11 @@ router.get("/assignments", async (req, res) => {
   // everyone may read their own assignments (dashboard "my project"); the full plan needs alloc.view
   const mine = req.query.mine === "1";
   if (!mine && !req.can("alloc.view")) return res.status(403).json({ error: "forbidden" });
-  res.json(await col("assignments").find(mine ? { employeeId: req.user.employee._id } : {}).toArray());
+  res.json(await col("assignments").find(mine ? { employeeId: req.user.employee._id } : scopeQ(req)).toArray());
 });
 router.post("/assignments", requireCap("alloc.edit"), audit("assignment.create"), async (req, res) => {
   const { employeeId, projectId, phase, stream, from, to } = req.body;
+  if (refuseOutOfScope(req, res, oid(employeeId))) return;
   const emp = await col("employees").findOne({ _id: new ObjectId(employeeId) });
   if (!emp) return res.status(404).json({ error: "employee_not_found" });
   if (emp.inactive) return res.status(422).json({ error: "employee_inactive", detail: emp.name + " is marked inactive." });
@@ -384,15 +491,24 @@ router.post("/assignments", requireCap("alloc.edit"), audit("assignment.create")
   await col("assignments").insertOne({ employeeId: emp._id, projectId: new ObjectId(projectId), phase: phase || null, stream, from: day(from), to: day(to), weeklyHours: Number(req.body.weeklyHours) || 40, createdAt: new Date(), createdBy: req.user.employee.name });
   res.status(201).json({ ok: true, splitsWith: concurrent.length });
 });
+// an existing assignment may only be changed for someone in the caller's scope
+async function refuseAssignmentOutOfScope(req, res) {
+  const a = await col("assignments").findOne({ _id: oid(req.params.id) }, { projection: { employeeId: 1 } });
+  if (!a) { res.status(404).json({ error: "not_found" }); return true; }
+  return refuseOutOfScope(req, res, a.employeeId);
+}
 router.patch("/assignments/:id/end", requireCap("alloc.edit"), audit("assignment.end"), async (req, res) => {
+  if (await refuseAssignmentOutOfScope(req, res)) return;
   await col("assignments").updateOne({ _id: new ObjectId(req.params.id) }, { $set: { to: day(req.body.to || R.toISO(new Date())), updatedAt: new Date() } });
   res.json({ ok: true });
 });
 router.delete("/assignments/:id", requireCap("alloc.edit"), audit("assignment.delete"), async (req, res) => {
+  if (await refuseAssignmentOutOfScope(req, res)) return;
   await col("assignments").deleteOne({ _id: new ObjectId(req.params.id) });
   res.json({ ok: true });
 });
 router.get("/burn", requireCap("alloc.view"), async (req, res) => {
+  if (refuseScoped(req, res)) return;
   const year = Number(req.query.year || new Date().getFullYear());
   const s = await settings();
   const { weekendDays, holidaySet } = leaveCtx(s);
@@ -405,6 +521,7 @@ router.get("/burn", requireCap("alloc.view"), async (req, res) => {
 });
 
 router.get("/runway", requireCap("runway.view"), async (req, res) => {
+  if (refuseScoped(req, res)) return;
   const s = await settings();
   const { leaveTypes, weekendDays, holidaySet } = leaveCtx(s);
   const employees = await col("employees").find().toArray();
@@ -425,8 +542,8 @@ router.get("/reports/leave-project-role", requireCap("leave.reports"), async (re
   const employees = await col("employees").find().toArray();
   const empByName = Object.fromEntries(employees.map((e) => [e.name, { name: e.name, role: e.role }]));
   const nameById = Object.fromEntries(employees.map((e) => [String(e._id), e.name]));
-  const leaves = (await col("leaves").find().toArray()).map((l) => ({ name: nameById[String(l.employeeId)], start: iso(l.start), end: iso(l.end), type: l.type }));
-  const assignments = (await col("assignments").find().toArray()).map((a) => ({ name: nameById[String(a.employeeId)], projectId: String(a.projectId), from: iso(a.from), to: iso(a.to) }));
+  const leaves = (await col("leaves").find(scopeQ(req)).toArray()).map((l) => ({ name: nameById[String(l.employeeId)], start: iso(l.start), end: iso(l.end), type: l.type }));
+  const assignments = (await col("assignments").find(scopeQ(req)).toArray()).map((a) => ({ name: nameById[String(a.employeeId)], projectId: String(a.projectId), from: iso(a.from), to: iso(a.to) }));
   res.json(R.leaveByProjectRole(leaves, empByName, assignments, req.query.from || "0000-01-01", req.query.to || "9999-12-31", leaveTypes, weekendDays, holidaySet));
 });
 
@@ -602,11 +719,13 @@ router.delete("/plans/:id", requireCap("plans.manage"), audit("plan.delete"), as
 });
 
 // ---------- performance ----------
-router.get("/scores", requireCap("perf.view"), async (_req, res) => {
-  res.json(await col("scores").find().sort({ week: 1 }).toArray());
+router.get("/scores", requireCap("perf.view"), async (req, res) => {
+  res.json(await col("scores").find(scopeQ(req)).sort({ week: 1 }).toArray());
 });
-router.put("/scores", requireCap("perf.view"), audit("score.upsert"), async (req, res) => {
+// entering a score needs perf.score — perf.view alone (e.g. a Viewer) only reads
+router.put("/scores", requireCap("perf.score"), audit("score.upsert"), async (req, res) => {
   const { employeeId, week, m } = req.body;
+  if (refuseOutOfScope(req, res, oid(employeeId))) return;
   if (!Array.isArray(m) || m.length !== 6 || m.some((x) => x !== null && (x < 0 || x > 5))) return res.status(422).json({ error: "invalid_metrics" });
   await col("scores").updateOne(
     { employeeId: new ObjectId(employeeId), week: day(week) },
@@ -618,9 +737,9 @@ router.put("/scores", requireCap("perf.view"), audit("score.upsert"), async (req
 router.get("/perf/report/:kind", requireCap("perf.reports"), async (req, res) => {
   const s = await settings();
   const cfg = s.performance || { weights: [25, 20, 10, 25, 10, 10], green: 3.5, amber: 2.5, partnerOnly: true };
-  const employees = (await col("employees").find().toArray()).map((e) => ({ name: e.name, company: e.company, start: iso(e.startDate), term: iso(e.endDate) }));
-  const byId = Object.fromEntries((await col("employees").find().toArray()).map((e) => [String(e._id), e.name]));
-  const scores = (await col("scores").find().toArray()).map((x) => ({ name: byId[String(x.employeeId)], week: iso(x.week), m: x.m }));
+  const employees = (await col("employees").find(scopeQ(req, "_id")).toArray()).map((e) => ({ name: e.name, company: e.company, start: iso(e.startDate), term: iso(e.endDate) }));
+  const byId = Object.fromEntries((await col("employees").find(scopeQ(req, "_id")).toArray()).map((e) => [String(e._id), e.name]));
+  const scores = (await col("scores").find(scopeQ(req)).toArray()).map((x) => ({ name: byId[String(x.employeeId)], week: iso(x.week), m: x.m }));
   if (req.params.kind === "scorecard") return res.json(R.perfScorecard(employees, scores, req.query.week, cfg));
   if (req.params.kind === "vendors") return res.json(R.perfVendorTrend(employees, scores, cfg));
   if (req.params.kind === "resource") return res.json(R.perfResourceTrend(scores, req.query.name, cfg));
@@ -698,6 +817,8 @@ router.put("/admin/employees/:id/admin", requireAdmin, audit("employee.setAdmin"
   if (typeof isAdmin !== "boolean") return res.status(422).json({ error: "isAdmin_must_be_boolean" });
   if (isAdmin && (await col("employees").findOne({ _id: id, inactive: true }))) return res.status(422).json({ error: "employee_inactive", detail: "Inactive employees can't be made Admin." });
   if (!isAdmin && id.equals(req.user.employee._id)) return res.status(422).json({ error: "cannot_revoke_self", detail: "You can't remove your own Admin access — ask another Admin." });
+  // Admins see the whole team, so a team manager has to be unflagged (reportees reassigned) first
+  if (isAdmin && (await col("employees").findOne({ _id: id, teamManager: true }))) return res.status(422).json({ error: "team_manager", detail: "This person is flagged as a team manager — remove that flag on the Employees page (reassigning their reportees) before making them Admin." });
   const r = await col("employees").updateOne({ _id: id }, { $set: { isAdmin, updatedAt: new Date(), updatedBy: req.user.employee.name } });
   if (!r.matchedCount) return res.status(404).json({ error: "employee_not_found" });
   res.json({ ok: true });
