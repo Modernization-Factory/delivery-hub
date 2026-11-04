@@ -2,9 +2,13 @@ import { useState, useMemo } from "react";
 import { STREAM_COLORS, aOverlaps, activeAssignmentsOn, computeBurn, crossProjectConcurrent } from "../lib/allocations.js";
 import { OPEN_END } from "../lib/constants.js";
 import { fmt, fmtShort, monthRange, parseISO } from "../lib/dates.js";
-import { isActiveDuring } from "../lib/leave.js";
+import { isActiveDuring, leaveColor, leaveDaysInRange } from "../lib/leave.js";
+import { canSeeWorkingDays } from "../lib/permissions.js";
+import { sumAll, sumMonths, workingDaysByMonth } from "../lib/workdays.js";
+import { downloadXlsx } from "../lib/xlsx.js";
 import { Btn, Card, Field, Notice, Pill, Stat, inputCls } from "../ui/atoms.jsx";
 import { BRAND_FONT } from "../ui/brand.jsx";
+import { usePaged } from "../ui/usePaged.jsx";
 
 // ============================================================
 // ALLOCATIONS (Lead/PM/Admin assign · PM/Admin manage projects)
@@ -12,7 +16,10 @@ import { BRAND_FONT } from "../ui/brand.jsx";
 export function AllocationsView(ctx) {
   const { assignments, setAssignments, projects, employees, empByName, weekendDays, holidaySet, nextId, todayISO } = ctx;
   const canEdit = ctx.can("alloc.edit");
-  const [tab, setTab] = useState("plan"); // plan | projects | burn
+  // the working-days report is a PM / Admin planning tool, and it reads everyone's comp-off,
+  // so it needs the full comp-off log too — Leads, Developers and Viewers never see it
+  const canWorkingDays = canSeeWorkingDays(ctx.user.role) && ctx.can("leave.compoff");
+  const [tab, setTab] = useState("plan"); // plan | roster | burn | wd
   const [year, setYear] = useState(2026);
   const [q, setQ] = useState("");
   const [fproj, setFproj] = useState("All");
@@ -76,7 +83,7 @@ export function AllocationsView(ctx) {
         <h2 className="text-xl font-semibold text-slate-900" style={{ fontFamily: BRAND_FONT }}>Allocations</h2>
         <div className="flex flex-wrap gap-2">
           <div className="flex overflow-hidden rounded-lg border border-slate-300">
-            {[["plan", "Plan"], ["roster", "Roster"], ["burn", "Projected Burn"]].map(([v, lab]) => (
+            {[["plan", "Plan"], ["roster", "Roster"], ["burn", "Projected Burn"], ...(canWorkingDays ? [["wd", "Working Days"]] : [])].map(([v, lab]) => (
               <button key={v} onClick={() => setTab(v)}
                 className={"px-4 py-2 text-sm font-medium transition " + (tab === v ? "mdb-btn-primary text-white" : "bg-white text-slate-600 hover:bg-slate-50")}>
                 {lab}
@@ -336,6 +343,8 @@ export function AllocationsView(ctx) {
           )}
         </>
       )}
+
+      {tab === "wd" && <WorkingDaysReport {...ctx} year={year} />}
     </div>
   );
 }
@@ -412,5 +421,251 @@ export function ProjectBurnCard({ project, perProj, rows, mLabel }) {
       </div>
       <p className="mt-2 text-xs text-slate-400">Capacity = effort days ÷ working days in the month (person-months, "p-m"). A full-month allocation = 1.00; partial months show as fractions.</p>
     </Card>
+  );
+}
+
+// ============================================================
+// WORKING DAYS REPORT — per resource, month by month, net of leave and comp-off.
+// The capacity side of the allocation plan: what each person can actually be
+// planned for once leave and comp-off are taken out.
+// ============================================================
+export function WorkingDaysReport(ctx) {
+  const { allEmployees, leaves, comps, leaveTypes, weekendDays, holidaySet, assignments, allProjects, todayISO } = ctx;
+  const year = ctx.year || Number(String(todayISO || "").slice(0, 4)) || new Date().getFullYear();
+  const all = allEmployees || ctx.employees || [];
+  const [month, setMonth] = useState("all");
+  const [role, setRole] = useState("All");
+  const [company, setCompany] = useState("All");
+  const [proj, setProj] = useState("All");
+  const [metric, setMetric] = useState("net");
+  const [q, setQ] = useState("");
+  const [open, setOpen] = useState(null);
+  const r1 = (x) => Math.round(x * 10) / 10;
+  const MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+  const METRICS = [["net", "Net working days"], ["base", "Calendar working days"], ["leave", "Leave days"], ["comp", "Comp-off earned"]];
+  const visMonths = month === "all" ? MONTHS : [Number(month)];
+  const [periodStart, periodEnd] = month === "all" ? [year + "-01-01", year + "-12-31"] : monthRange(year, Number(month));
+  const mLabel = (m) => parseISO(year + "-" + String(m).padStart(2, "0") + "-01").toLocaleDateString("en-IN", { month: "short" });
+  const roles = [...new Set(all.map((e) => e.role || "No role set"))].sort();
+  const companies = [...new Set(all.map((e) => e.company || "No company set"))].sort();
+  const projList = (allProjects || ctx.projects || []).slice().sort((a, b) => a.name.localeCompare(b.name));
+  const projName = (pid) => { const p = projList.find((x) => x.id === pid); return p ? p.name : pid; };
+  // a person matches the project filter when any of their assignments overlaps the period
+  const projNames = useMemo(() => {
+    if (proj === "All") return null;
+    return new Set(assignments.filter((a) => a.projectId === proj && a.from <= periodEnd && periodStart <= (a.to || OPEN_END)).map((a) => a.name));
+  }, [proj, assignments, periodStart, periodEnd]);
+  const filter = (e) => (role === "All" || (e.role || "No role set") === role)
+    && (company === "All" || (e.company || "No company set") === company)
+    && (!q || e.name.toLowerCase().includes(q.toLowerCase()))
+    && (!projNames || projNames.has(e.name));
+  const rep = useMemo(() => workingDaysByMonth(all, leaves, comps, year, leaveTypes, weekendDays, holidaySet, filter),
+    [all, leaves, comps, year, leaveTypes, weekendDays, holidaySet, role, company, q, projNames]); // eslint-disable-line react-hooks/exhaustive-deps
+  const { rows: pageRows, pager } = usePaged(rep.rows, 25);
+  const metricLabel = (METRICS.find((m) => m[0] === metric) || ["", "Net working days"])[1];
+  const totalOf = (r) => sumMonths(r, visMonths, metric);
+  const grand = (k) => sumAll(rep.rows, visMonths, k);
+  const periodText = month === "all" ? String(year) : mLabel(Number(month)) + " " + year;
+  const filterText = [role !== "All" && role, company !== "All" && company, proj !== "All" && projName(proj), q && "“" + q + "”"].filter(Boolean).join(" · ") || "all resources";
+  const recordsIn = (name) => leaves
+    .filter((l) => l.name === name && l.end >= periodStart && l.start <= periodEnd)
+    .map((l) => ({ l, days: leaveDaysInRange(l, periodStart, periodEnd, leaveTypes, weekendDays, holidaySet) }))
+    .filter((x) => x.days > 0)
+    .sort((a, b) => a.l.start.localeCompare(b.l.start));
+  const compsIn = (name) => comps.filter((c) => c.name === name && c.date >= periodStart && c.date <= periodEnd).sort((a, b) => a.date.localeCompare(b.date));
+  const typeOf = (name) => {
+    const o = {};
+    recordsIn(name).forEach((x) => { o[x.l.type] = (o[x.l.type] || 0) + x.days; });
+    return o;
+  };
+  // every configured leave type feeds the net — surface the split so nothing looks left out
+  const leaveByType = useMemo(() => {
+    const out = {};
+    rep.rows.forEach((r) => leaves.forEach((l) => {
+      if (l.name !== r.name || l.end < periodStart || l.start > periodEnd) return;
+      const d = leaveDaysInRange(l, periodStart, periodEnd, leaveTypes, weekendDays, holidaySet);
+      if (d) out[l.type] = (out[l.type] || 0) + d;
+    }));
+    return out;
+  }, [rep, leaves, periodStart, periodEnd, leaveTypes, weekendDays, holidaySet]);
+
+  function exportExcel() {
+    const head = ["Resource", "Role", "Company", ...visMonths.map((m) => mLabel(m) + " " + year), metricLabel];
+    const body = rep.rows.map((r) => [r.name, r.emp.role || "", r.emp.company || "", ...visMonths.map((m) => r1(r.byMonth[m][metric])), r1(totalOf(r))]);
+    const totalRow = ["All", "", "", ...visMonths.map((m) => r1(rep.totals.byMonth[m][metric])), r1(grand(metric))];
+    const detail = [["Resource", "Month", "Calendar working days", "Leave days", "Comp-off earned", "Net working days"]];
+    rep.rows.forEach((r) => visMonths.forEach((m) => {
+      const c = r.byMonth[m];
+      detail.push([r.name, mLabel(m) + " " + year, r1(c.base), r1(c.leave), r1(c.comp), r1(c.net)]);
+    }));
+    const leaveSheet = [["Resource", "Role", "Company", "Start", "End", "Type", "Days in period", "Comment"]];
+    rep.rows.forEach((r) => recordsIn(r.name).forEach((x) => leaveSheet.push([r.name, r.emp.role || "", r.emp.company || "", x.l.start, x.l.end, x.l.type, r1(x.days), x.l.comment || ""])));
+    const compSheet = [["Resource", "Role", "Company", "Date worked", "Days", "Reason"]];
+    rep.rows.forEach((r) => compsIn(r.name).forEach((c) => compSheet.push([r.name, r.emp.role || "", r.emp.company || "", c.date, r1(Number(c.days)), c.reason || ""])));
+    const typeSheet = [["Leave type", "Day value", "Days"]];
+    leaveTypes.forEach((t) => typeSheet.push([t.name, t.value, r1(leaveByType[t.name] || 0)]));
+    typeSheet.push(["All types", "", r1(grand("leave"))]);
+    const filters = [["Filters"], ["Period", periodText], ["Role", role], ["Company", company], ["Project", proj === "All" ? "All projects" : projName(proj)], ["Metric", metricLabel], ["Name contains", q || "—"]];
+    downloadXlsx("working-days-" + (month === "all" ? String(year) : year + "-" + String(month).padStart(2, "0")) + ".xlsx", [
+      ["Working days", [head, ...body, totalRow]],
+      ["By month", detail],
+      ["Leave by type", typeSheet],
+      ["Leave records", leaveSheet],
+      ["Comp-off earned", compSheet],
+      ["Filters", filters],
+    ]);
+  }
+
+  return (
+    <div className="space-y-5">
+      <Notice tone="ok">
+        Working days are counted inside each person's employment window only — weekends and the {holidaySet.size} configured holidays are excluded.
+        <b> Net</b> = calendar working days − leave + comp-off earned. Every leave type counts — {leaveTypes.map((t) => t.name + (t.value === 1 ? "" : " (" + t.value + " day)")).join(", ")} — so comp-off taken is subtracted like any other leave, and comp-off earned (a weekend or holiday worked) is added back.
+      </Notice>
+
+      <Card>
+        <div className="flex flex-wrap items-end gap-3">
+          <Field label="Month">
+            <select className={inputCls + " w-36"} value={month} onChange={(e) => setMonth(e.target.value)}>
+              <option value="all">All of {year}</option>
+              {MONTHS.map((m) => <option key={m} value={m}>{mLabel(m)} {year}</option>)}
+            </select>
+          </Field>
+          <Field label="Role">
+            <select className={inputCls + " w-44"} value={role} onChange={(e) => setRole(e.target.value)}>
+              <option>All</option>{roles.map((r) => <option key={r}>{r}</option>)}
+            </select>
+          </Field>
+          <Field label="Company">
+            <select className={inputCls + " w-36"} value={company} onChange={(e) => setCompany(e.target.value)}>
+              <option>All</option>{companies.map((c) => <option key={c}>{c}</option>)}
+            </select>
+          </Field>
+          <Field label="Project">
+            <select className={inputCls + " w-44"} value={proj} onChange={(e) => setProj(e.target.value)}>
+              <option value="All">All projects</option>
+              {projList.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Show">
+            <select className={inputCls + " w-44"} value={metric} onChange={(e) => setMetric(e.target.value)}>
+              {METRICS.map(([v, lab]) => <option key={v} value={v}>{lab}</option>)}
+            </select>
+          </Field>
+          <Field label="Name">
+            <input className={inputCls + " w-40"} placeholder="Search…" value={q} onChange={(e) => setQ(e.target.value)} />
+          </Field>
+          <div className="ml-auto self-end"><Btn kind="ghost" small onClick={exportExcel} disabled={!rep.rows.length}>⬇ Excel</Btn></div>
+        </div>
+      </Card>
+
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Stat label="Net working days" value={r1(grand("net"))} sub={periodText + " · " + filterText} />
+        <Stat label="Calendar working days" value={r1(grand("base"))} sub="before leave and comp-off" />
+        <Stat label="Leave days" value={r1(grand("leave"))} sub={"across " + rep.totals.people + " resource(s)"} />
+        <Stat label="Comp-off earned" value={r1(grand("comp"))} sub="weekend / holiday days worked" />
+      </div>
+
+      <Card title={"Leave days by type — " + periodText + " (every type counts toward the net)"}>
+        <div className="flex flex-wrap gap-2">
+          {leaveTypes.map((t) => (
+            <span key={t.name} className={"inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium " + leaveColor(t.name, leaveTypes)}>
+              {t.name}<span className="text-sm font-semibold">{r1(leaveByType[t.name] || 0)}</span>
+            </span>
+          ))}
+          <span className="inline-flex items-center gap-2 rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700">
+            All leave<span className="text-sm font-semibold">{r1(grand("leave"))}</span>
+          </span>
+        </div>
+        <p className="mt-2 text-xs text-slate-400">Each leave day is weighted by its type's value — a Half Day counts 0.5. Comp-off taken is the comp-off type above; comp-off earned is added separately.</p>
+      </Card>
+
+      <Card title={metricLabel + " — " + periodText}>
+        {rep.rows.length === 0 ? <p className="text-sm text-slate-500">No resources match these filters.</p> : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
+                  <th className="py-2 pr-4">Resource</th>
+                  <th className="py-2 pr-4">Role · Company</th>
+                  {visMonths.map((m) => <th key={m} className="py-2 pr-3 text-right">{mLabel(m)}</th>)}
+                  <th className="py-2 pr-4 text-right">Total</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {pageRows.map((r) => {
+                  const isOpen = open === r.name;
+                  const bt = isOpen ? typeOf(r.name) : {};
+                  return [
+                    <tr key={r.name} className="cursor-pointer hover:bg-slate-50" onClick={() => setOpen(isOpen ? null : r.name)}>
+                      <td className="py-2 pr-4 font-medium text-slate-800"><span className="mr-1 text-slate-400">{isOpen ? "▾" : "▸"}</span>{r.name}</td>
+                      <td className="py-2 pr-4 text-xs text-slate-500">{(r.emp.role || "—") + " · " + (r.emp.company || "—")}{r.emp.inactive ? " · inactive" : ""}</td>
+                      {visMonths.map((m) => (
+                        <td key={m} className="py-2 pr-3 text-right">{r.byMonth[m][metric] ? r1(r.byMonth[m][metric]) : <span className="text-slate-300">—</span>}</td>
+                      ))}
+                      <td className="py-2 pr-4 text-right font-semibold text-slate-900">{r1(totalOf(r))}</td>
+                    </tr>,
+                    isOpen && (
+                      <tr key={r.name + "_detail"}>
+                        <td colSpan={visMonths.length + 3} className="bg-slate-50 px-4 py-3">
+                          <div className="grid gap-4 lg:grid-cols-2">
+                            <div>
+                              <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Leave — {r1(sumMonths(r, visMonths, "leave"))} day(s)</div>
+                              <div className="mb-2 flex flex-wrap gap-1">
+                                {leaveTypes.map((t) => (
+                                  <span key={t.name} className={"rounded px-1.5 py-0.5 text-xs " + (bt[t.name] ? leaveColor(t.name, leaveTypes) : "bg-slate-100 text-slate-400")}>
+                                    {t.name} {r1(bt[t.name] || 0)}
+                                  </span>
+                                ))}
+                              </div>
+                              {recordsIn(r.name).length === 0 ? <p className="text-xs text-slate-400">No leave in this period.</p> : (
+                                <ul className="space-y-1">
+                                  {recordsIn(r.name).map((x) => (
+                                    <li key={x.l.id} className="flex flex-wrap items-center gap-2 text-xs text-slate-700">
+                                      <Pill tone={leaveColor(x.l.type, leaveTypes)}>{x.l.type}</Pill>
+                                      <span>{fmtShort(x.l.start)}{x.l.start !== x.l.end ? " – " + fmtShort(x.l.end) : ""}</span>
+                                      <span className="text-slate-400">{r1(x.days)} day(s)</span>
+                                      {x.l.comment && <span className="italic text-slate-600">“{x.l.comment}”</span>}
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+                            </div>
+                            <div>
+                              <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Comp-off earned — {r1(sumMonths(r, visMonths, "comp"))} day(s)</div>
+                              {compsIn(r.name).length === 0 ? <p className="text-xs text-slate-400">No comp-off earned in this period.</p> : (
+                                <ul className="space-y-1">
+                                  {compsIn(r.name).map((c) => (
+                                    <li key={c.id} className="flex flex-wrap items-center gap-2 text-xs text-slate-700">
+                                      <span>{fmtShort(c.date)}</span>
+                                      <Pill tone="bg-teal-100 text-teal-800">{r1(Number(c.days))} day(s)</Pill>
+                                      {c.reason && <span className="text-slate-500">{c.reason}</span>}
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    ),
+                  ];
+                })}
+                <tr className="border-t border-slate-200 font-semibold">
+                  <td className="py-2 pr-4">All</td>
+                  <td className="py-2 pr-4 text-xs font-normal text-slate-500">{rep.totals.people} resource(s)</td>
+                  {visMonths.map((m) => <td key={m} className="py-2 pr-3 text-right">{r1(rep.totals.byMonth[m][metric])}</td>)}
+                  <td className="py-2 pr-4 text-right">{r1(grand(metric))}</td>
+                </tr>
+              </tbody>
+            </table>
+            {pager}
+            <p className="mt-2 text-xs text-slate-400">
+              Net = calendar working days − leave + comp-off earned. Working days are clipped to each person's employment window (start → end date), and a leave spanning a month end counts in both months. Click a resource for their leave and comp-off detail.
+            </p>
+          </div>
+        )}
+      </Card>
+    </div>
   );
 }

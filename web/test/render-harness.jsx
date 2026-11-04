@@ -4,7 +4,7 @@ import { renderToString } from "react-dom/server";
 import { defaultPerms, canDo } from "../src/lib/permissions.js";
 import { AdminPanel } from "../src/views/Admin.jsx";
 import { AllLeaveRecords } from "../src/views/AllLeaveRecords.jsx";
-import { AllocationsView } from "../src/views/Allocations.jsx";
+import { AllocationsView, WorkingDaysReport } from "../src/views/Allocations.jsx";
 import { ComingSoon } from "../src/views/ComingSoon.jsx";
 import { CompOffLog } from "../src/views/CompOffLog.jsx";
 import { Dashboard } from "../src/views/Dashboard.jsx";
@@ -95,6 +95,9 @@ export const SCREENS = {
   TimecardGrid: () => TimecardGrid(ctx),
   TimecardInsights: () => TimecardInsights(ctx),
   AllocationsView: () => AllocationsView(ctx),
+  AllocationsViewAsLead: () => AllocationsView(asRole("Ravi", "Lead")),
+  AllocationsViewAsViewer: () => AllocationsView(asRole("Vic", "Viewer")),
+  AllocationsWorkingDays: () => WorkingDaysReport(ctx),
   ProgramHealthView: () => ProgramHealthView(ctx),
   TeamPlansView: () => TeamPlansView(ctx),
   PerformanceView: () => PerformanceView(ctx),

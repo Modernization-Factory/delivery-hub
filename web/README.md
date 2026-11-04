@@ -33,6 +33,7 @@ src/
   lib/                pure domain logic — no React, no JSX, unit-tested
     dates.js          parseISO/toISO/fmt, working days, WORKDAY math, week anchor
     leave.js          leave days, duplicates/overlaps, balances, leave-by-project
+    workdays.js       working days per resource/month, net of leave and comp-off
     timecard.js       proactiveness stats, compliance %, Excel grid parser
     allocations.js    assignment overlap rules, day-weighted effort, computeBurn
     runway.js         consumption, per-role runway, runwaySummary
