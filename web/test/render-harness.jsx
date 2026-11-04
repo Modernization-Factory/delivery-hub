@@ -6,7 +6,7 @@ import { AdminPanel } from "../src/views/Admin.jsx";
 import { AllLeaveRecords } from "../src/views/AllLeaveRecords.jsx";
 import { AllocationsView, WorkingDaysReport } from "../src/views/Allocations.jsx";
 import { ComingSoon } from "../src/views/ComingSoon.jsx";
-import { CompOffLog } from "../src/views/CompOffLog.jsx";
+import { CompOffLog, CompOffSummary } from "../src/views/CompOffLog.jsx";
 import { Dashboard } from "../src/views/Dashboard.jsx";
 import { EmployeesView } from "../src/views/Employees.jsx";
 import { LeaveMonthly, LeaveReports } from "../src/views/LeaveReports.jsx";
@@ -77,6 +77,12 @@ const healthRow = {
 
 // the same fixtures seen through another role's permissions
 const asRole = (name, role) => ({ ...ctx, user: { name, role, email: name.toLowerCase() + "@example.com" }, can: (cap) => canDo(defaultPerms(), role, cap) });
+// an org where Ravi (e1, flagged) manages Asha (e0); `id` is the signed-in person
+const pendingAsha = { id: "c7", name: "Asha", date: "2026-07-11", days: 1, reason: "weekend-fix", status: "pending", createdBy: "Asha" };
+const withOrg = (c, id, comps) => {
+  const es = [{ ...employees[0], managerId: "e1" }, { ...employees[1], teamManager: true }, employees[2]];
+  return { ...c, user: { ...c.user, id }, employees: es, allEmployees: es, empByName: Object.fromEntries(es.map((e) => [e.name, e])), comps };
+};
 // a flagged team manager: their role plus the Team Manager column, project screens off
 const asManager = (name, role) => ({ ...ctx, user: { name, role, email: name.toLowerCase() + "@example.com", teamManager: true }, can: (cap) => effectiveCan(defaultPerms(), role, true, cap) });
 ctx.assignments = ctx.assignments || [];
@@ -96,6 +102,13 @@ export const SCREENS = {
   CompOffLog: () => CompOffLog(ctx),
   // a Developer's own-only view, fed a list that (wrongly) also holds someone else's entry
   CompOffLogDeveloper: () => CompOffLog({ ...asRole("Asha", "Developer"), comps: [...ctx.comps, { id: "c1", name: "Ravi", date: "2026-07-11", days: 1, reason: "ravi-weekend" }] }),
+  // approvals: Ravi (flagged Lead) manages Asha, who self-logged a weekend that's waiting
+  CompOffApprovalsManager: () => CompOffLog(withOrg(asManager("Ravi", "Lead"), "e1", [pendingAsha])),
+  CompOffApprovalsAdmin: () => CompOffLog(withOrg(asRole("Dushyant", "Admin"), "e9", [pendingAsha])),
+  CompOffApprovalsPM: () => CompOffLog(withOrg(asRole("Mia", "Project Manager"), "e2", [pendingAsha])),
+  CompOffOwnPending: () => CompOffLog(withOrg(asRole("Asha", "Developer"), "e0", [pendingAsha])),
+  CompOffOwnPendingAsManager: () => CompOffLog(withOrg(asManager("Ravi", "Lead"), "e1", [{ ...pendingAsha, id: "c8", name: "Ravi" }])),
+  CompOffSummaryView: () => CompOffSummary({ ...ctx, team: "All", q: "", coOf: () => "WeKan", comps: [...ctx.comps, pendingAsha, { id: "c9", name: "Ravi", date: "2026-07-04", days: 0.5, reason: "", status: "approved" }] }),
   CompOffLogSeniorDev: () => CompOffLog({ ...asRole("Asha", "Senior Developer"), comps: [...ctx.comps, { id: "c1", name: "Ravi", date: "2026-07-11", days: 1, reason: "ravi-weekend" }] }),
   TimecardGrid: () => TimecardGrid(ctx),
   TimecardInsights: () => TimecardInsights(ctx),

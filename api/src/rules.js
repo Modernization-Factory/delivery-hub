@@ -92,9 +92,20 @@ function balancesFor(name, leaves, comps, leaveTypes, weekendDays, holidaySet) {
       const d = leaveDays(l.start, l.end, l.type, leaveTypes, weekendDays, holidaySet);
       byType[l.type] = (byType[l.type] || 0) + d;
     });
-  const earned = comps.filter((c) => c.name === name).reduce((s, c) => s + Number(c.days), 0);
+  // only approved comp-off is earned; pending days wait for a manager and can't be spent yet
+  const mine = comps.filter((c) => c.name === name);
+  const sum = (st) => mine.filter((c) => compOffStatus(c) === st).reduce((s, c) => s + Number(c.days), 0);
+  const earned = sum("approved");
   const used = byType[compOffTypeName(leaveTypes)] || 0;
-  return { byType, compOffEarned: earned, compOffUsed: used, compOffBalance: earned - used };
+  return { byType, compOffEarned: earned, compOffPending: sum("pending"), compOffUsed: used, compOffBalance: earned - used };
+}
+// entries from before approval existed carry no status — they count as approved
+function compOffStatus(c) {
+  return (c && c.status) || "approved";
+}
+// a self-logged entry waits for a manager; one logged by someone else (or by an Admin) is approved
+function newCompOffStatus(self, isAdmin) {
+  return self && !isAdmin ? "pending" : "approved";
 }
 // employee active during [rangeStart, rangeEnd]? (start before range ends, end date not before range starts)
 function isActiveDuring(e, rangeStart, rangeEnd) {
@@ -374,6 +385,16 @@ function managersAbove(employees, id) {
   }
   return out;
 }
+// Who may approve or reject a pending comp-off: an Admin for anyone; otherwise a flagged team
+// manager (with leave.compoffApprove) anywhere above that person in the reporting chain —
+// never for their own entry. `approver` is { id, role (app role), teamManager }.
+function canDecideCompOff(approver, employees, targetId, can) {
+  if (!approver) return false;
+  if (approver.role === "Admin") return true;
+  if (!approver.teamManager || !can("leave.compoffApprove")) return false;
+  if (!targetId || targetId === approver.id) return false;
+  return managersAbove(employees, targetId).includes(approver.id);
+}
 // the reason a proposed employee record breaks the reporting rules, or null
 function reportingError(employees, next) {
   const prev = next.id ? employees.find((e) => e.id === next.id) : null;
@@ -414,6 +435,7 @@ const PERM_GROUPS = [
     ["leave.forAnyone", "File / delete leave for anyone", { D: 0, L: 1, P: 1, V: 0, M: 1 }],
     ["leave.compoffOwn", "Log own comp-off earned · delete own entries", { D: 1, L: 1, P: 1, V: 0, M: 1 }],
     ["leave.compoff", "Log & manage comp-off for anyone (full ledger)", { D: 0, L: 1, P: 1, V: 0, M: 1 }],
+    ["leave.compoffApprove", "Approve / reject pending comp-off for your reporting chain (team managers)", { D: 0, L: 0, P: 0, V: 0, M: 1 }],
     ["leave.reports", "Leave reports (role / company / project totals)", { D: 0, L: 1, P: 1, V: 1, M: 1 }],
     ["settings.edit", "Leave settings (types · weekends · holidays)", { D: 0, L: 0, P: 1, V: 0, M: 0 }],
   ]},
@@ -833,9 +855,9 @@ function computeBurn(assignments, employees, empByName, year, weekendDays, holid
 module.exports = {
   TC_STATUSES, METRICS, STREAMS, NAME_ALIASES, PERM_GROUPS, PARTNER_COS, OPEN_END, RUNWAY_ROLES,
   parseISO, toISO, isWeekend, isWorkingDay, workingDaysBetween, monthRange,
-  leaveDays, leaveDaysInRange, isDuplicate, findOverlaps, compOffDateValid, balancesFor, onLeaveOn,
+  leaveDays, leaveDaysInRange, isDuplicate, findOverlaps, compOffDateValid, balancesFor, compOffStatus, newCompOffStatus, onLeaveOn,
   isActiveDuring, appRoleOf, appRoleForEmp, compOffTypeName, tcWeekDays, onLeaveWholeWeek, canDeletePastLeave, canLogCompOff,
-  canBeTeamManager, isTeamManager, reporteesOf, reportingChain, managersAbove, reportingError,
+  canBeTeamManager, isTeamManager, reporteesOf, reportingChain, managersAbove, reportingError, canDecideCompOff,
   tcStats, tcStatsFlex, weekCompliance, weekComplianceFlex, tcSuggested,
   excelToISO, parseTimecardGrid,
   aOverlaps, crossProjectConcurrent, activeAssignmentsOn, effortSplitInMonth, assignmentDaysInMonth, streamsInMonth, currentStream,

@@ -53,7 +53,7 @@ test("a Developer / Senior Developer comp-off page shows only their own entries"
     assert.ok(!html.includes(">Employee<"), screen + ": employee picker / column shown");
   }
   const pm = harness.renderScreen("CompOffLog");
-  assert.ok(pm.includes("Comp-Off Earned") && pm.includes("All companies") && pm.includes(">Employee<"), "a PM keeps the full ledger");
+  assert.ok(pm.includes("Comp-off ledger") && pm.includes("All companies") && pm.includes(">Employee<"), "a PM keeps the full ledger");
 });
 
 test("Employees shows reporting lines, team managers and reportees of an inactive manager", () => {
@@ -80,6 +80,28 @@ test("a flagged team manager doesn't get project burn or whole-team timecard act
 test("the permission matrix shows the Team Manager column", () => {
   const html = harness.renderScreen("AdminPanel").replace(/<!-- -->/g, "");
   assert.ok(html.includes(">Team Manager<"), "Team Manager column header");
+});
+
+// Approval: the queue shows only for someone who may decide the entry (a manager above the
+// person, or an Admin) — never for the person themselves, and not for an unflagged PM.
+test("comp-off approvals appear for the manager above and for Admin only", () => {
+  const txt = (n) => harness.renderScreen(n).replace(/<!-- -->/g, "");
+  const mgr = txt("CompOffApprovalsManager");
+  assert.ok(mgr.includes("Waiting for your approval — 1 entry") && mgr.includes("Approve") && mgr.includes("weekend-fix"), "Ravi sees Asha's entry");
+  assert.ok(txt("CompOffApprovalsAdmin").includes("Waiting for your approval"), "an Admin approves anyone");
+  assert.ok(!txt("CompOffApprovalsPM").includes("Waiting for your approval"), "an unflagged PM doesn't approve");
+  const own = txt("CompOffOwnPending");
+  assert.ok(!own.includes("Waiting for your approval"), "nobody approves their own");
+  assert.ok(own.includes("Waiting for approval") && own.includes(">Pending<"), "the Developer sees their entry as pending");
+  assert.ok(own.includes("waits for approval by Ravi (or a manager above them, or an Admin)"), "and who will approve it");
+  assert.ok(!txt("CompOffOwnPendingAsManager").includes("Waiting for your approval"), "a manager can't approve their own entry");
+});
+
+test("the comp-off summary gives each resource earned / pending / used / balance", () => {
+  const html = harness.renderScreen("CompOffSummaryView").replace(/<!-- -->/g, "");
+  assert.ok(html.includes("Comp-off by resource") && html.includes("Pending approval"), "summary renders");
+  assert.ok(html.includes(">Asha<") && html.includes(">Ravi<"), "one row per resource");
+  assert.ok(html.includes("1 entry"), "pending entry count");
 });
 
 test("the harness covers every screen module in src/views", async () => {

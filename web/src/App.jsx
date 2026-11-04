@@ -70,7 +70,7 @@ export default function App() {
   }
   async function loadComps(empNameById) {
     const cs = await api("/compoffs").catch((e) => (e.status === 403 ? api("/compoffs?mine=1") : Promise.reject(e)));
-    setComps0(cs.map((c) => ({ id: String(c._id), name: empNameById[String(c.employeeId)], date: dstr(c.dateWorked), days: c.days, reason: c.reason || "" })).filter((c) => c.name));
+    setComps0(cs.map((c) => ({ id: String(c._id), name: empNameById[String(c.employeeId)], date: dstr(c.dateWorked), days: c.days, reason: c.reason || "", status: c.status || "approved", createdBy: c.createdBy || "", decidedBy: c.decidedBy || "", decisionNote: c.decisionNote || "" })).filter((c) => c.name));
   }
   async function loadTimecards(empNameById) {
     const docs = await api("/timecards").catch((e) => (e.status === 403 ? api("/timecards?mine=1") : Promise.reject(e)));
@@ -188,6 +188,8 @@ export default function App() {
       remove: (c) => fire("/compoffs", api("/compoffs/" + c.id, { method: "DELETE" })),
     });
   };
+  // approve / reject a pending comp-off (the server checks the approver), then reload the ledger
+  const decideCompOff = async (id, decision, note) => { await api("/compoffs/" + id + "/decision", { method: "POST", body: { decision, note } }); await loadComps(empNameByIdNow()); };
   const setEmployees = (next0) => {
     // pickers pass the active-only list — never let that drop inactive employees from state
     const next = [...next0, ...employees.filter((e) => e.inactive && !next0.some((x) => x.id === e.id))];
@@ -478,7 +480,7 @@ export default function App() {
     setTcWeeks, assignments, setAssignments, projects: openProjects, allProjects: projects, setProjects, setProjectClosed, jiraFlags,
     scores, setScores, perfCfg, setPerfCfg, can, perms, setPerms, extLinks, setExtLinks, plans, setPlans, empFields, setEmpFields, raid, setRaid, milestones, setMilestones, weeklyHealth, setWeeklyHealth, pipeline, setPipeline, uploadTimecardFile, setTcFlag,
     todayISO, canManage, canConfigure, isDev, isAdmin,
-    setLeaves, setLeaveComment, updateLeave, setComps, setTcRows, setEmployees, setLeaveTypes, renameLeaveType, setWeekendDays, setHolidays, nextId, setNav, setEmployeeAdmin,
+    setLeaves, setLeaveComment, updateLeave, setComps, decideCompOff, setTcRows, setEmployees, setLeaveTypes, renameLeaveType, setWeekendDays, setHolidays, nextId, setNav, setEmployeeAdmin,
   };
 
   return (

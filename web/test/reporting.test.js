@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { canBeTeamManager, isTeamManager, managerOptions, managersAbove, reporteesOf, reportingChain, reportingError } from "../src/lib/reporting.js";
+import { canBeTeamManager, canDecideCompOff, isTeamManager, managerOptions, managersAbove, reporteesOf, reportingChain, reportingError } from "../src/lib/reporting.js";
 
 // A small org:   Asha (mgr) ─┬─ Ravi (mgr) ─── Neha
 //                            └─ Kiran
@@ -110,4 +110,44 @@ test("unflagging is blocked only while someone still reports to them", () => {
   assert.deepEqual(reportingError(es, { ...es[5], teamManager: false }), { error: "has_reportees", detail: "Sam still reports to Old — assign them another manager first." });
   const lone = [E("Solo", { teamManager: true })];
   assert.equal(reportingError(lone, { ...lone[0], teamManager: false }), null);
+});
+
+// ---- comp-off approval: who may decide a pending entry
+const can = (on = true) => (cap) => cap === "leave.compoffApprove" && on;
+const as = (id, o = {}) => ({ id, role: "Lead", teamManager: true, ...o });
+test("a pending comp-off is decided by a manager anywhere above, or an Admin", () => {
+  const es = org();
+  assert.equal(canDecideCompOff(as("Ravi"), es, "Neha", can()), true); // direct manager
+  assert.equal(canDecideCompOff(as("Asha"), es, "Neha", can()), true); // manager's manager
+  assert.equal(canDecideCompOff(as("Asha"), es, "Kiran", can()), true);
+  assert.equal(canDecideCompOff(as("Ravi"), es, "Kiran", can()), false); // a peer's reportee
+  assert.equal(canDecideCompOff(as("Neha", { teamManager: false }), es, "Ravi", can()), false); // a reportee, upwards
+  assert.equal(canDecideCompOff(as("Ravi"), es, "Ravi", can()), false); // never your own
+  assert.equal(canDecideCompOff(as("Asha"), es, "Asha", can()), false);
+  assert.equal(canDecideCompOff(as("Ravi", { teamManager: false }), es, "Neha", can()), false); // flag gone
+  assert.equal(canDecideCompOff(as("Ravi"), es, "Neha", can(false)), false); // approval switched off in the matrix
+  assert.equal(canDecideCompOff(as("Mia", { role: "Project Manager", teamManager: false }), es, "Neha", can(false)), false); // a PM doesn't approve
+  assert.equal(canDecideCompOff(as("Adm", { role: "Admin", teamManager: false }), es, "Neha", can(false)), true); // an Admin does, for anyone
+  assert.equal(canDecideCompOff(as("Adm", { role: "Admin", teamManager: false }), es, "Mia", can(false)), true);
+  assert.equal(canDecideCompOff(null, es, "Neha", can()), false);
+});
+
+test("reportees of an inactive manager are approved further up, or by an Admin", () => {
+  // Old (inactive) still holds Sam: nobody above Old, so only an Admin can approve Sam's entry
+  const es = org();
+  assert.equal(canDecideCompOff(as("Asha"), es, "Sam", can()), false);
+  assert.equal(canDecideCompOff(as("Adm", { role: "Admin", teamManager: false }), es, "Sam", can()), true);
+  // with Old under Asha, Asha can approve for Sam even though Old is inactive
+  const under = es.map((e) => (e.id === "Old" ? { ...e, managerId: "Asha" } : e));
+  assert.equal(canDecideCompOff(as("Asha"), under, "Sam", can()), true);
+});
+
+test("the API's approval rule gives the same answers", async () => {
+  const { createRequire } = await import("node:module");
+  const R = createRequire(import.meta.url)("../../api/src/rules.js");
+  const es = org();
+  const approvers = [as("Ravi"), as("Asha"), as("Ravi", { teamManager: false }), as("Adm", { role: "Admin", teamManager: false }), as("Mia", { role: "Project Manager", teamManager: false })];
+  for (const a of approvers) for (const t of es) for (const on of [true, false]) {
+    assert.equal(R.canDecideCompOff(a, es, t.id, can(on)), canDecideCompOff(a, es, t.id, can(on)), a.id + " -> " + t.id + " " + on);
+  }
 });

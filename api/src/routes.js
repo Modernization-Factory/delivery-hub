@@ -61,6 +61,20 @@ function refuseScoped(req, res) {
   return true;
 }
 
+// days of comp-off leave `employeeId` can still take: approved earned minus comp-off leave
+// already taken (leaving out `ignoreLeaveId` when that leave is being edited)
+async function compOffAvailable(employeeId, leaveTypes, weekendDays, holidaySet, ignoreLeaveId) {
+  const name = "_";
+  const leaves = (await col("leaves").find({ employeeId, ...(ignoreLeaveId ? { _id: { $ne: ignoreLeaveId } } : {}) }).toArray()).map((l) => ({ name, start: iso(l.start), end: iso(l.end), type: l.type }));
+  const comps = (await col("compOffs").find({ employeeId }).toArray()).map((c) => ({ name, days: c.days, status: c.status }));
+  return R.balancesFor(name, leaves, comps, leaveTypes, weekendDays, holidaySet);
+}
+function compOffShortfall(res, bal, days, coName) {
+  if (bal.compOffBalance >= days) return false;
+  res.status(422).json({ error: "insufficient_compoff", detail: coName + " balance is " + bal.compOffBalance + " day(s), not enough for " + days + "." + (bal.compOffPending ? " " + bal.compOffPending + " day(s) are still waiting for approval." : "") });
+  return true;
+}
+
 async function settings() {
   return (await col("settings").findOne({ _id: "global" })) || {};
 }
@@ -192,6 +206,8 @@ router.post("/leaves", audit("leave.create"), async (req, res) => {
   if (R.isDuplicate(existing, entry)) return res.status(409).json({ error: "duplicate" });
   const days = R.leaveDays(start, end, type, leaveTypes, weekendDays, holidaySet);
   if (days === 0) return res.status(422).json({ error: "no_working_days" });
+  const coName = R.compOffTypeName(leaveTypes);
+  if (type === coName && compOffShortfall(res, await compOffAvailable(target._id, leaveTypes, weekendDays, holidaySet), days, coName)) return;
   const overlaps = R.findOverlaps(existing, entry);
   if (overlaps.length && !force) return res.status(409).json({ error: "overlap", overlaps });
   await col("leaves").insertOne({ employeeId: target._id, start: day(start), end: day(end), type, ...(comment ? { comment } : {}), createdAt: new Date(), createdBy: req.user.employee.name });
@@ -218,7 +234,12 @@ router.put("/leaves/:id", audit("leave.update"), async (req, res) => {
   if (!manager && start < today) return res.status(422).json({ error: "start_in_past", detail: "You can only move your leave to today or later." });
   const { leaveTypes, weekendDays, holidaySet } = leaveCtx(await settings());
   if (!leaveTypes.some((t) => t.name === type)) return res.status(422).json({ error: "unknown_leave_type", detail: "\"" + type + "\" isn't a configured leave type." });
-  if (R.leaveDays(start, end, type, leaveTypes, weekendDays, holidaySet) === 0) return res.status(422).json({ error: "no_working_days" });
+  const days = R.leaveDays(start, end, type, leaveTypes, weekendDays, holidaySet);
+  if (days === 0) return res.status(422).json({ error: "no_working_days" });
+  // only an edit that adds comp-off days is checked, so an old over-drawn leave can still be moved
+  const coName = R.compOffTypeName(leaveTypes);
+  const wasDays = l.type === coName ? R.leaveDays(iso(l.start), iso(l.end), l.type, leaveTypes, weekendDays, holidaySet) : 0;
+  if (type === coName && days > wasDays && compOffShortfall(res, await compOffAvailable(l.employeeId, leaveTypes, weekendDays, holidaySet, l._id), days, coName)) return;
   const emp = await col("employees").findOne({ _id: l.employeeId });
   const others = (await col("leaves").find({ employeeId: l.employeeId, _id: { $ne: l._id } }).toArray()).map((x) => ({ id: String(x._id), name: emp.name, start: iso(x.start), end: iso(x.end), type: x.type }));
   const entry = { name: emp.name, start, end, type };
@@ -276,11 +297,29 @@ router.post("/compoffs", audit("compoff.create"), async (req, res) => {
   const { weekendDays, holidaySet } = leaveCtx(s);
   if (!R.compOffDateValid(dateWorked, weekendDays, holidaySet)) return res.status(422).json({ error: "not_weekend_or_holiday" });
   try {
-    await col("compOffs").insertOne({ employeeId: targetId, dateWorked: day(dateWorked), days, reason: reason || null, createdAt: new Date(), createdBy: req.user.employee.name });
+    // self-logged waits for a manager; logged by someone else (or an Admin) is approved
+    const status = R.newCompOffStatus(self, req.user.role === "Admin");
+    await col("compOffs").insertOne({ employeeId: targetId, dateWorked: day(dateWorked), days, reason: reason || null, status, createdAt: new Date(), createdBy: req.user.employee.name });
   } catch (e) {
     return res.status(409).json({ error: "duplicate_entry" });
   }
   res.status(201).json({ ok: true });
+});
+// Approve or reject a pending entry: an Admin for anyone, otherwise a team manager anywhere
+// above the person in their reporting chain (never their own). Only approved days can be spent.
+router.post("/compoffs/:id/decision", audit("compoff.decide"), async (req, res) => {
+  const c = await col("compOffs").findOne({ _id: oid(req.params.id) });
+  if (!c) return res.status(404).json({ error: "not_found" });
+  const decision = req.body && req.body.decision;
+  if (decision !== "approve" && decision !== "reject") return res.status(422).json({ error: "invalid_decision", detail: "decision must be approve or reject." });
+  const approver = { id: String(req.user.employee._id), role: req.user.role, teamManager: req.user.teamManager };
+  if (!R.canDecideCompOff(approver, await org(), String(c.employeeId), req.can)) return res.status(403).json({ error: "not_your_approval", detail: "Only a manager above this person in their reporting chain, or an Admin, can decide it." });
+  if (R.compOffStatus(c) !== "pending") return res.status(409).json({ error: "already_decided", status: R.compOffStatus(c) });
+  const note = String((req.body && req.body.note) || "").trim().slice(0, 300);
+  // only a still-pending entry is changed, so two managers deciding at once can't both win
+  const r = await col("compOffs").updateOne({ _id: c._id, status: "pending" }, { $set: { status: decision === "approve" ? "approved" : "rejected", decidedBy: req.user.employee.name, decidedAt: new Date(), ...(note ? { decisionNote: note } : {}) } });
+  if (!r.modifiedCount) return res.status(409).json({ error: "already_decided" });
+  res.json({ ok: true, status: decision === "approve" ? "approved" : "rejected" });
 });
 router.delete("/compoffs/:id", audit("compoff.delete"), async (req, res) => {
   const c = await col("compOffs").findOne({ _id: oid(req.params.id) });

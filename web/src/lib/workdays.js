@@ -2,7 +2,7 @@
 // WORKING DAYS — per resource, per month, net of leave and comp-off
 // ============================================================
 import { monthRange, workingDaysBetween } from "./dates.js";
-import { leaveDaysInRange } from "./leave.js";
+import { compOffStatus, leaveDaysInRange } from "./leave.js";
 
 // Total working days for each resource, month by month, net of leave and comp-off:
 //
@@ -10,7 +10,7 @@ import { leaveDaysInRange } from "./leave.js";
 //          (weekends and the configured holidays are already excluded)
 //   leave  their leave landing in the month, each day weighted by the leave type's
 //          value — a Half Day counts 0.5, and comp-off *taken* is one of the types
-//   comp   comp-off *earned* in the month (a weekend or holiday actually worked)
+//   comp   comp-off *earned* in the month (a weekend or holiday actually worked, approved)
 //   net    base − leave + comp — the days the person can really be planned for
 //
 // `filter(emp)` narrows the roster (role / company / project / name). A person with no
@@ -27,7 +27,7 @@ export function workingDaysByMonth(employees, leaves, comps, year, leaveTypes, w
     return o;
   };
   const leaveOf = byName(leaves);
-  const compOf = byName(comps);
+  const compOf = byName(comps.filter((c) => compOffStatus(c) === "approved")); // pending / rejected days aren't earned yet
   const totals = { byMonth: {}, base: 0, leave: 0, comp: 0, net: 0, people: 0 };
   months.forEach((m) => (totals.byMonth[m] = { base: 0, leave: 0, comp: 0, net: 0 }));
   const rows = [];

@@ -115,3 +115,14 @@ test("totals add up across people and sumMonths narrows to one month", () => {
   assert.equal(sumAll(rep.rows, [7], "leave"), 5);
   assert.equal(sumAll(rep.rows, [7, 8], "base"), 46 + 42); // 21 + 21 working days in Aug 2026
 });
+
+test("only approved comp-off adds to working days", () => {
+  const comps = [
+    { id: "c1", name: "Asha", date: "2026-07-18", days: 1 },
+    { id: "c2", name: "Asha", date: "2026-07-25", days: 1, status: "pending" },
+    { id: "c3", name: "Asha", date: "2026-07-26", days: 1, status: "rejected" },
+  ];
+  const rep = run([E({})], [], comps);
+  assert.equal(rep.rows[0].byMonth[7].comp, 1);
+  assert.equal(rep.rows[0].byMonth[7].net, 24);
+});

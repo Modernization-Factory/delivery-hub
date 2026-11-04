@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { LEAVE_COLORS, balancesFor, compOffDateValid, compOffTypeName, leaveColor, onLeaveWholeWeek, tcWeekDays, findOverlaps, isActiveDuring, isDuplicate, leaveByProjectRole, leaveByMonth, leaveDays, leaveDaysInRange, monthsBetween, onLeaveOn } from "../src/lib/leave.js";
+import { LEAVE_COLORS, balancesFor, compOffDateValid, compOffStatus, compOffTypeName, newCompOffStatus, leaveColor, onLeaveWholeWeek, tcWeekDays, findOverlaps, isActiveDuring, isDuplicate, leaveByProjectRole, leaveByMonth, leaveDays, leaveDaysInRange, monthsBetween, onLeaveOn } from "../src/lib/leave.js";
 import { HOLIDAYS, LEAVE_TYPES, NO_HOLIDAYS, WEEKEND } from "./fixtures.js";
 
 test("leaveDays counts working days and applies the type's day value", () => {
@@ -148,4 +148,37 @@ test("onLeaveWholeWeek needs every working day covered by full-day leave", () =>
   assert.equal(onLeaveWholeWeek("Asha", W, [L("2026-10-26", "2026-10-30", "Half Day")], LEAVE_TYPES, WEEKEND, NO_HOLIDAYS), false); // half days aren't absence
   assert.equal(onLeaveWholeWeek("Asha", W, [L("2026-10-19", "2026-10-23")], LEAVE_TYPES, WEEKEND, NO_HOLIDAYS), false); // the week before
   assert.equal(onLeaveWholeWeek("Ravi", W, [L("2026-10-26", "2026-10-30")], LEAVE_TYPES, WEEKEND, NO_HOLIDAYS), false); // someone else
+});
+
+test("only approved comp-off is earned; pending is reported apart and rejected is ignored", () => {
+  const comps = [
+    { id: "c1", name: "Asha", date: "2026-07-11", days: 1 }, // logged before approval existed -> approved
+    { id: "c2", name: "Asha", date: "2026-07-12", days: 1, status: "approved" },
+    { id: "c3", name: "Asha", date: "2026-07-18", days: 1, status: "pending" },
+    { id: "c4", name: "Asha", date: "2026-07-19", days: 0.5, status: "pending" },
+    { id: "c5", name: "Asha", date: "2026-07-25", days: 1, status: "rejected" },
+  ];
+  const leaves = [{ id: "l1", name: "Asha", start: "2026-07-20", end: "2026-07-20", type: "Comp-Off" }];
+  const b = balancesFor("Asha", leaves, comps, LEAVE_TYPES, WEEKEND, NO_HOLIDAYS);
+  assert.equal(b.compOffEarned, 2);
+  assert.equal(b.compOffPending, 1.5);
+  assert.equal(b.compOffUsed, 1);
+  assert.equal(b.compOffBalance, 1); // pending can't be spent
+});
+
+test("compOffStatus defaults to approved; self-logged entries start pending unless an Admin logs them", () => {
+  assert.equal(compOffStatus({}), "approved");
+  assert.equal(compOffStatus({ status: "pending" }), "pending");
+  assert.equal(newCompOffStatus(true, false), "pending");
+  assert.equal(newCompOffStatus(true, true), "approved");
+  assert.equal(newCompOffStatus(false, false), "approved"); // logged by someone else
+});
+
+test("the API's comp-off balance and status rules match", async () => {
+  const { createRequire } = await import("node:module");
+  const R = createRequire(import.meta.url)("../../api/src/rules.js");
+  const comps = [{ name: "A", days: 1 }, { name: "A", days: 1, status: "pending" }, { name: "A", days: 1, status: "rejected" }, { name: "B", days: 0.5, status: "approved" }];
+  const leaves = [{ name: "A", start: "2026-07-20", end: "2026-07-20", type: "Comp-Off" }];
+  for (const n of ["A", "B"]) assert.deepEqual(R.balancesFor(n, leaves, comps, LEAVE_TYPES, WEEKEND, NO_HOLIDAYS), balancesFor(n, leaves, comps, LEAVE_TYPES, WEEKEND, NO_HOLIDAYS));
+  for (const [s, a] of [[true, false], [true, true], [false, false]]) assert.equal(R.newCompOffStatus(s, a), newCompOffStatus(s, a));
 });

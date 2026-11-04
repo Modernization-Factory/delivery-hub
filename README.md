@@ -227,6 +227,21 @@ from that record per request (Stream Leads get Lead access, `isAdmin` grants eve
 finer-grained rights come from the editable capability matrix in the `permissions`
 collection — the same registry the frontend Admin panel edits.
 
+**Team managers and reporting lines.** An employee can be flagged as a *team manager*
+(any role except Project Manager and Admin) and others set to report to them. A flagged
+manager keeps their role's rights, adds the matrix's **Team Manager** column, and sees
+only themselves and their whole reporting chain — on every screen, Team Calendar included.
+Project screens (Projects, Team Plans, Program Health, Runway) are off for them, because
+those numbers come from everyone on a project. The API enforces this: `resolveUser`
+computes the chain per request, people-data reads are filtered to it, and writes for
+anyone outside it are refused (`outside_reporting_chain`).
+
+**Comp-off approval.** Comp-off someone logs for themselves is *pending* until a team
+manager above them in the chain, or an Admin, approves it; only approved days count
+toward a balance, the Working Days report, or comp-off leave (checked server-side too).
+Comp-off logged for someone else is approved straight away. Entries from before approval
+existed carry no status and count as approved.
+
 ---
 
 ## 5. Deployment (Kanopy)

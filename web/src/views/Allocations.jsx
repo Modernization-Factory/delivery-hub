@@ -2,7 +2,7 @@ import { useState, useMemo } from "react";
 import { STREAM_COLORS, aOverlaps, activeAssignmentsOn, computeBurn, crossProjectConcurrent } from "../lib/allocations.js";
 import { OPEN_END } from "../lib/constants.js";
 import { fmt, fmtShort, monthRange, parseISO } from "../lib/dates.js";
-import { isActiveDuring, leaveColor, leaveDaysInRange } from "../lib/leave.js";
+import { compOffStatus, isActiveDuring, leaveColor, leaveDaysInRange } from "../lib/leave.js";
 import { canSeeWorkingDays } from "../lib/permissions.js";
 import { reportLeaveTypes, sumAll, sumMonths, workingDaysByMonth } from "../lib/workdays.js";
 import { downloadXlsx } from "../lib/xlsx.js";
@@ -474,7 +474,7 @@ export function WorkingDaysReport(ctx) {
     .map((l) => ({ l, days: leaveDaysInRange(l, periodStart, periodEnd, leaveTypes, weekendDays, holidaySet) }))
     .filter((x) => x.days > 0)
     .sort((a, b) => a.l.start.localeCompare(b.l.start));
-  const compsIn = (name) => comps.filter((c) => c.name === name && c.date >= periodStart && c.date <= periodEnd).sort((a, b) => a.date.localeCompare(b.date));
+  const compsIn = (name) => comps.filter((c) => c.name === name && compOffStatus(c) === "approved" && c.date >= periodStart && c.date <= periodEnd).sort((a, b) => a.date.localeCompare(b.date));
   const typeOf = (name) => {
     const o = {};
     recordsIn(name).forEach((x) => { o[x.l.type] = (o[x.l.type] || 0) + x.days; });

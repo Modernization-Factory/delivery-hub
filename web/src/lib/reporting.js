@@ -77,3 +77,14 @@ export function reportingError(employees, next) {
   }
   return null;
 }
+
+// Who may approve or reject a pending comp-off: an Admin for anyone; otherwise a flagged team
+// manager (with leave.compoffApprove) anywhere above that person in the reporting chain —
+// never for their own entry. `approver` is { id, role (app role), teamManager }.
+export function canDecideCompOff(approver, employees, targetId, can) {
+  if (!approver) return false;
+  if (approver.role === "Admin") return true;
+  if (!approver.teamManager || !can("leave.compoffApprove")) return false;
+  if (!targetId || targetId === approver.id) return false;
+  return managersAbove(employees, targetId).includes(approver.id);
+}

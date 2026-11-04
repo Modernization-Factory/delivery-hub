@@ -8,6 +8,7 @@ export const PERM_GROUPS = [
     ["leave.forAnyone", "File / delete leave for anyone", { D: 0, L: 1, P: 1, V: 0, M: 1 }],
     ["leave.compoffOwn", "Log own comp-off earned · delete own entries", { D: 1, L: 1, P: 1, V: 0, M: 1 }],
     ["leave.compoff", "Log & manage comp-off for anyone (full ledger)", { D: 0, L: 1, P: 1, V: 0, M: 1 }],
+    ["leave.compoffApprove", "Approve / reject pending comp-off for your reporting chain (team managers)", { D: 0, L: 0, P: 0, V: 0, M: 1 }],
     ["leave.reports", "Leave reports (role / company / project totals)", { D: 0, L: 1, P: 1, V: 1, M: 1 }],
     ["settings.edit", "Leave settings (types · weekends · holidays)", { D: 0, L: 0, P: 1, V: 0, M: 0 }],
   ]},
