@@ -113,6 +113,12 @@ test("the comp-off summary gives each resource earned / pending / used / balance
   assert.ok(html.includes("1 entry"), "pending entry count");
 });
 
+test("the external links card says the links are for Admins only", () => {
+  const html = harness.renderScreen("AdminPanel").replace(/<!-- -->/g, "");
+  assert.ok(html.includes("in Admins' sidebar only") || html.includes("in Admins&#x27; sidebar only"), "Admin-only wording");
+  assert.ok(!html.includes("everyone's sidebar") && !html.includes("everyone&#x27;s sidebar"), "old wording gone");
+});
+
 test("the harness covers every screen module in src/views", async () => {
   const fs = await import("node:fs");
   const views = fs.readdirSync(path.join(root, "src/views")).filter((f) => f.endsWith(".jsx"));

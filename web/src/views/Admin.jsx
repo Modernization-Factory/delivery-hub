@@ -113,7 +113,7 @@ export function AdminAccessCard(ctx) {
   );
 }
 
-// External application links manager (Admin) — rendered in every user's sidebar
+// External application links manager (Admin) — rendered in Admins' sidebar only
 export function ExtLinksCard(ctx) {
   const { extLinks, setExtLinks, nextId } = ctx;
   const [f, setF] = useState({ label: "", url: "", description: "" });
@@ -127,7 +127,7 @@ export function ExtLinksCard(ctx) {
     setF({ label: "", url: "", description: "" });
   }
   return (
-    <Card title={"External application links (" + extLinks.length + ") — shown in everyone's sidebar under \"Links\""}>
+    <Card title={"External application links (" + extLinks.length + ") — shown under \"Links\" in Admins' sidebar only"}>
       <div className="grid gap-3 sm:grid-cols-4">
         <Field label="Menu label"><input className={inputCls} value={f.label} onChange={(e) => setF({ ...f, label: e.target.value })} placeholder="JIRA board" /></Field>
         <Field label="URL"><input className={inputCls} value={f.url} onChange={(e) => setF({ ...f, url: e.target.value })} placeholder="https://…" /></Field>
