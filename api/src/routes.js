@@ -755,7 +755,12 @@ router.put("/perf/config", requireCap("perf.config"), audit("perf.config"), asyn
 });
 
 // ---------- settings & admin ----------
-router.get("/settings", async (_req, res) => res.json(await settings()));
+// external application links are for Admins only — everyone else gets the settings without them
+router.get("/settings", async (req, res) => {
+  const s = await settings();
+  if (!req.user.employee.isAdmin) delete s.extLinks;
+  res.json(s);
+});
 router.put("/settings", requireCap("settings.edit"), audit("settings.update"), async (req, res) => {
   const { leaveTypes, weekendDays, holidays, extLinks, empFields } = req.body;
   if (leaveTypes) {

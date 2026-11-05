@@ -388,7 +388,7 @@ export default function App() {
   const [scores, setScores0] = useState([]);
   const [perfCfg, setPerfCfg0] = useState({ weights: [25, 20, 10, 25, 10, 10], green: 3.5, amber: 2.5, partnerOnly: true });
   const [perms, setPerms0] = useState(defaultPerms);
-  const [extLinks, setExtLinks0] = useState([]); // admin-managed external app links shown in the sidebar
+  const [extLinks, setExtLinks0] = useState([]); // admin-managed external app links, shown in Admins' sidebar only
   const [plans, setPlans0] = useState([]); // team plans: project+phase month-window resource planning
   const [empFields, setEmpFields0] = useState([]); // admin-defined custom fields on the employee master: [{id, label}]
   const [raid, setRaid0] = useState([]); // per-project RAID log entries
@@ -536,7 +536,7 @@ export default function App() {
                 </div>
               );
             })}
-            {extLinks.length > 0 && (
+            {isAdmin && extLinks.length > 0 && ( /* external links: Admins only (the API also withholds them) */
               <div className="border-t border-slate-100 pt-2">
                 <div className="px-3 pb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">Links</div>
                 {extLinks.map((l) => (
