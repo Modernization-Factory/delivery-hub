@@ -218,7 +218,7 @@ router.post("/leaves", audit("leave.create"), async (req, res) => {
 // own leave only, and only while it hasn't started (and not into the past). The same checks as
 // filing apply; timecard N/A is recalculated so it follows the leave.
 router.put("/leaves/:id", audit("leave.update"), async (req, res) => {
-  const l = await col("leaves").findOne({ _id: new ObjectId(req.params.id) });
+  const l = await col("leaves").findOne({ _id: oid(req.params.id) });
   if (!l) return res.status(404).json({ error: "not_found" });
   const today = R.toISO(new Date());
   const own = String(l.employeeId) === String(req.user.employee._id);
@@ -251,7 +251,7 @@ router.put("/leaves/:id", audit("leave.update"), async (req, res) => {
   res.json({ ok: true, autoNA, warnings: overlaps.length ? ["overlap_saved"] : [] });
 });
 router.patch("/leaves/:id/comment", audit("leave.comment"), async (req, res) => {
-  const l = await col("leaves").findOne({ _id: new ObjectId(req.params.id) });
+  const l = await col("leaves").findOne({ _id: oid(req.params.id) });
   if (!l) return res.status(404).json({ error: "not_found" });
   const own = String(l.employeeId) === String(req.user.employee._id);
   if (!own && !req.can("leave.forAnyone")) return res.status(403).json({ error: "forbidden" });
@@ -261,7 +261,7 @@ router.patch("/leaves/:id/comment", audit("leave.comment"), async (req, res) => 
   res.json({ ok: true });
 });
 router.delete("/leaves/:id", audit("leave.delete"), async (req, res) => {
-  const l = await col("leaves").findOne({ _id: new ObjectId(req.params.id) });
+  const l = await col("leaves").findOne({ _id: oid(req.params.id) });
   if (!l) return res.status(404).json({ error: "not_found" });
   const own = String(l.employeeId) === String(req.user.employee._id);
   if (!own && !req.can("leave.forAnyone")) return res.status(403).json({ error: "forbidden" });
@@ -347,7 +347,7 @@ router.put("/timecards/:id", requireCap("timecard.editAll"), audit("timecard.upd
   const tc = await col("timecards").findOne({ _id: oid(req.params.id) }, { projection: { employeeId: 1 } });
   if (!tc) return res.status(404).json({ error: "not_found" });
   if (refuseOutOfScope(req, res, tc.employeeId)) return;
-  await col("timecards").updateOne({ _id: new ObjectId(req.params.id) }, { $set: { sf: sf || null, jira: jira || null, updatedAt: new Date(), updatedBy: req.user.employee.name, source: "manual" }, $unset: { autoNA: "" } });
+  await col("timecards").updateOne({ _id: oid(req.params.id) }, { $set: { sf: sf || null, jira: jira || null, updatedAt: new Date(), updatedBy: req.user.employee.name, source: "manual" }, $unset: { autoNA: "" } });
   res.json({ ok: true });
 });
 // outlier flag + comment on one person-week; kept separate from sf/jira so a sheet re-import never clears it
@@ -357,7 +357,7 @@ router.put("/timecards/:id/flag", requireCap("timecard.flag"), audit("timecard.f
   const tc = await col("timecards").findOne({ _id: oid(req.params.id) }, { projection: { employeeId: 1 } });
   if (!tc) return res.status(404).json({ error: "not_found" });
   if (refuseOutOfScope(req, res, tc.employeeId)) return;
-  const r = await col("timecards").updateOne({ _id: new ObjectId(req.params.id) }, flagged
+  const r = await col("timecards").updateOne({ _id: oid(req.params.id) }, flagged
     ? { $set: { flag: { comment, by: req.user.employee.name, at: new Date() } } }
     : { $unset: { flag: "" } });
   if (!r.matchedCount) return res.status(404).json({ error: "not_found" });
@@ -431,7 +431,7 @@ router.put("/projects/:id", audit("project.update"), async (req, res) => {
     if (currentMargin !== undefined) $set.currentMargin = currentMargin === null || currentMargin === "" ? null : Number(currentMargin);
     if (keyUpdate !== undefined) $set.keyUpdate = keyUpdate || "";
   }
-  await col("projects").updateOne({ _id: new ObjectId(req.params.id) }, { $set });
+  await col("projects").updateOne({ _id: oid(req.params.id) }, { $set });
   res.json({ ok: true });
 });
 // new work can't be booked against a closed project
@@ -443,7 +443,7 @@ async function refuseClosed(projectId, res) {
 // Close a completed project: it drops out of Program Health, runway, pickers and the
 // integration feed; open assignments end on the closure date. History is kept. Reopen undoes it.
 router.put("/projects/:id/close", requireCap("projects.manage"), audit("project.close"), async (req, res) => {
-  const id = new ObjectId(req.params.id);
+  const id = oid(req.params.id);
   const p = await col("projects").findOne({ _id: id });
   if (!p) return res.status(404).json({ error: "not_found" });
   if (req.body && req.body.reopen) {
@@ -462,9 +462,9 @@ router.put("/projects/:id/close", requireCap("projects.manage"), audit("project.
   res.json({ ok: true, endedAssignments: ended.modifiedCount, futureAssignments: future });
 });
 router.delete("/projects/:id", requireCap("projects.manage"), audit("project.delete"), async (req, res) => {
-  const inUse = await col("assignments").countDocuments({ projectId: new ObjectId(req.params.id) });
+  const inUse = await col("assignments").countDocuments({ projectId: oid(req.params.id) });
   if (inUse) return res.status(409).json({ error: "has_assignments", count: inUse });
-  await col("projects").deleteOne({ _id: new ObjectId(req.params.id) });
+  await col("projects").deleteOne({ _id: oid(req.params.id) });
   res.json({ ok: true });
 });
 router.get("/assignments", async (req, res) => {
@@ -499,12 +499,12 @@ async function refuseAssignmentOutOfScope(req, res) {
 }
 router.patch("/assignments/:id/end", requireCap("alloc.edit"), audit("assignment.end"), async (req, res) => {
   if (await refuseAssignmentOutOfScope(req, res)) return;
-  await col("assignments").updateOne({ _id: new ObjectId(req.params.id) }, { $set: { to: day(req.body.to || R.toISO(new Date())), updatedAt: new Date() } });
+  await col("assignments").updateOne({ _id: oid(req.params.id) }, { $set: { to: day(req.body.to || R.toISO(new Date())), updatedAt: new Date() } });
   res.json({ ok: true });
 });
 router.delete("/assignments/:id", requireCap("alloc.edit"), audit("assignment.delete"), async (req, res) => {
   if (await refuseAssignmentOutOfScope(req, res)) return;
-  await col("assignments").deleteOne({ _id: new ObjectId(req.params.id) });
+  await col("assignments").deleteOne({ _id: oid(req.params.id) });
   res.json({ ok: true });
 });
 router.get("/burn", requireCap("alloc.view"), async (req, res) => {

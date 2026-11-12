@@ -9,9 +9,27 @@ trigger:
   branch:
   - main
 
+# MongoDB for the API integration tests. In a Kubernetes pipeline services share
+# the pod's network, so the tests reach it on localhost.
+services:
+- name: mongo
+  image: mongo:7
+
+steps:
+# ── Tests (every push and PR; a failure stops the build before publish/deploy) ─
+- name: test-api
+  image: node:20
+  environment:
+    TEST_MONGODB_URI: mongodb://localhost:27017
+    MONGOMS_DISABLE_POSTINSTALL: "1"   # uses the service above, no mongod download
+  commands:
+  - cd api
+  - npm ci
+  - npm run test:unit
+  - npm run test:integration
+
 # ── Build & push the single image (API + built React bundle) ─────────────────
 # Built from the repo root: the Dockerfile's web/ stage needs it in context.
-steps:
 - name: publish
   image: plugins/kaniko-ecr
   settings:

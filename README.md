@@ -200,10 +200,27 @@ the workbooks disagree with what is already seeded:
 ## 3. Tests
 
 ```bash
-cd api && npm test     # shared business rules (leave, timecard, capacity, dates)
+cd api && npm test     # business-rules unit tests + API integration tests
+cd api && npm run test:integration   # just the integration tests
 cd web && npm test     # 99 tests: lib unit tests, render smoke tests, structure guards
 cd web && npm run build # bundles the app; also the type/import check for the views
 ```
+
+**API integration tests** (`api/test/integration/`) run the real Express app (`src/app.js`)
+on a random port against a real MongoDB and exercise it over HTTP: identity and role
+checks, the permissions matrix, leave filing/editing/deletion, employees, projects,
+settings, the audit log and the bearer-token `/api/integration` feed. Each test file gets
+its own throwaway database and reseeds a small known org before every test.
+
+- **Locally** nothing needs to be running: `mongodb-memory-server` starts a temporary
+  `mongod` (the first run downloads it, ~100 MB, then it is cached).
+- **Against an existing server** set `TEST_MONGODB_URI` (Drone does this with its `mongo`
+  service). Never point it at a real database — every test wipes the collections it uses.
+- Tests run with `TZ=UTC`, matching the Kanopy pods. Date handling in `rules.js` uses the
+  process's local time zone, so outside UTC stored dates read back a day off.
+
+Drone runs the unit and integration tests on every push and PR (`test-api` step), and a
+failure stops the build before anything is published or deployed.
 
 `web/test/structure.test.js` enforces the module layering (`lib/` stays pure, views never
 import each other, `App.jsx` stays a thin shell) and fails on any import cycle. See
