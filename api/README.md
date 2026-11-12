@@ -8,7 +8,7 @@ npm install
 cp .env.example .env         # fill in MONGODB_URI (+ Okta vars for oidc mode)
 npm run seed                 # one-time: loads all reconciled tracker data
 npm start                    # http://localhost:8080
-npm test                     # pure business-rules test suite
+npm test                     # business-rules unit tests + API integration tests
 ```
 
 ## Auth modes (set AUTH_MODE)
